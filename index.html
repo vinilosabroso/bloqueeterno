@@ -34,7 +34,9 @@ h1 small{display:block;font-family:var(--body);font-size:.72rem;color:var(--mute
 .blk{background:var(--col);box-shadow:inset 0 -4px 0 rgba(0,0,0,.28),inset 0 3px 0 rgba(255,255,255,.35),inset 3px 0 0 rgba(255,255,255,.12)}
 .c.ghost{background:var(--col);opacity:.45}
 .c.hint{box-shadow:inset 0 0 0 2px var(--gold)}
+.c.fx{position:absolute;pointer-events:none;z-index:2}
 .c.pop{animation:pop .32s ease-out forwards}
+body.dragging{touch-action:none;overscroll-behavior:none}
 @keyframes pop{0%{transform:scale(1);filter:brightness(1.8)}100%{transform:scale(.2);opacity:0}}
 #combo{position:absolute;left:50%;top:44%;transform:translate(-50%,-50%);font-family:var(--display);font-size:2.2rem;color:var(--gold);
   text-shadow:0 3px 0 #a35a00;pointer-events:none;opacity:0}
@@ -279,20 +281,24 @@ let drag=null;
 function cellSize(){ const r=boardEl.getBoundingClientRect(); return (r.width-12-3*7)/8; }
 function startDrag(e,i){
   e.preventDefault();
+  if(drag) return;                         // ya hay un arrastre en curso (segundo dedo, doble clic)
   const s=tray[i], cs=cellSize();
   dragEl.innerHTML=''; dragEl.style.gridTemplateColumns=`repeat(${s.w},${cs}px)`; dragEl.style.gridTemplateRows=`repeat(${s.h},${cs}px)`;
   s.cells.forEach(([r,c])=>{ const b=document.createElement('i'); b.className='blk'; b.style.setProperty('--col',s.col); b.style.gridRow=r+1; b.style.gridColumn=c+1; dragEl.appendChild(b); });
   dragEl.hidden=false;
   const lift = e.pointerType==='touch' ? 90 : 30; // levantamos la pieza para que el dedo no la tape
-  drag={i,s,cs,lift,pos:null};
+  drag={i,s,cs,lift,pos:null,id:e.pointerId};
   trayEl.children[i].style.opacity=.25;
+  document.body.classList.add('dragging');
   moveDrag(e);
+  // Escuchamos los tres eventos y los sacamos todos juntos al terminar,
+  // así no quedan oyentes sueltos que "traben" el arrastre siguiente.
   window.addEventListener('pointermove',moveDrag);
-  window.addEventListener('pointerup',endDrag,{once:true});
-  window.addEventListener('pointercancel',endDrag,{once:true});
+  window.addEventListener('pointerup',endDrag);
+  window.addEventListener('pointercancel',endDrag);
 }
 function moveDrag(e){
-  if(!drag) return;
+  if(!drag || e.pointerId!==drag.id) return;
   const {s,cs,lift}=drag, W=s.w*cs+(s.w-1)*3, H=s.h*cs+(s.h-1)*3;
   const x=e.clientX-W/2, y=e.clientY-H-lift+cs/2;
   dragEl.style.transform=`translate(${x}px,${y}px)`;
@@ -304,11 +310,16 @@ function moveDrag(e){
     render({set:new Set(s.cells.map(([a,b])=>(r+a)*N+c+b)), col:s.col});
   } else { drag.pos=null; render(); }
 }
-function endDrag(){
+function endDrag(e){
+  if(!drag || (e && e.pointerId!==drag.id)) return;
   window.removeEventListener('pointermove',moveDrag);
+  window.removeEventListener('pointerup',endDrag);
+  window.removeEventListener('pointercancel',endDrag);
+  document.body.classList.remove('dragging');
   dragEl.hidden=true;
-  const d=drag; drag=null; if(!d) return;
-  if(d.pos) commit(d.i,d.pos[0],d.pos[1]);
+  const d=drag; drag=null;
+  // Solo se coloca si se soltó (no si el navegador canceló el gesto) y si sigue entrando
+  if(e.type==='pointerup' && d.pos && fits(occ(board),d.s,d.pos[0],d.pos[1])) commit(d.i,d.pos[0],d.pos[1]);
   else { renderTray(); render(); }
 }
 
@@ -316,16 +327,32 @@ function commit(i,r,c){
   const s=tray[i];
   const res=placeO(occ(board),s,r,c);
   for(const [a,b] of s.cells) board[(r+a)*N+c+b]=s.col;
+  // Guardamos los colores para la animación y limpiamos el tablero YA.
+  // Antes se limpiaba 300 ms después: si soltabas otra pieza en ese lapso,
+  // el juego contaba como llenas celdas que ya no lo estaban y borraba de más.
+  const popped=res.cleared.map(k=>[k,board[k]]);
+  res.cleared.forEach(k=>board[k]=null);
   used[i]=true; rescued.delete(i);
   score+=s.cells.length;
   if(res.n){
     lines+=res.n; const pts=res.n*10*res.n; score+=pts;
-    res.cleared.forEach(k=>{ cellsEl[k].classList.add('pop'); });
     const cb=$('#combo'); cb.textContent=res.n>1?`¡x${res.n}! +${pts}`:`+${pts}`; cb.classList.remove('show'); void cb.offsetWidth; cb.classList.add('show');
-    render();
-    res.cleared.forEach(k=>{ cellsEl[k].classList.add('pop'); });
-    setTimeout(()=>{ res.cleared.forEach(k=>board[k]=null); after(); },300);
-  } else after();
+  }
+  after();
+  popAnim(popped);
+}
+// La animación vive en una capa aparte: no toca el estado del tablero
+function popAnim(list){
+  list.forEach(([k,col])=>{
+    const cell=cellsEl[k], f=document.createElement('div');
+    f.className='c blk fx pop';
+    f.style.setProperty('--col',col);
+    f.style.left=cell.offsetLeft+'px'; f.style.top=cell.offsetTop+'px';
+    f.style.width=cell.offsetWidth+'px'; f.style.height=cell.offsetHeight+'px';
+    f.addEventListener('animationend',()=>f.remove());
+    boardEl.appendChild(f);
+    setTimeout(()=>f.remove(),600);   // por si no corre la animación (movimiento reducido)
+  });
 }
 function after(){
   if(score>best){ best=score; try{localStorage.setItem('be-best',best);}catch(e){} }
