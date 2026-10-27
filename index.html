@@ -16,7 +16,12 @@
   --body:"Nunito",system-ui,-apple-system,Segoe UI,sans-serif;
   color-scheme:dark;
 }
-html,body{height:100%}
+/* Reset propio: fuera de Claude (GitHub Pages) no hay uno por defecto.
+   Sin la regla [hidden], el CSS de #drag pisaba el atributo hidden y la pieza
+   arrastrada quedaba "congelada" en pantalla después de soltarla. */
+*,*::before,*::after{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%;margin:0}
 body{background:radial-gradient(120% 80% at 50% 0%,var(--bg2),var(--bg));color:var(--fg);font-family:var(--body);
   padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
   user-select:none;-webkit-user-select:none;touch-action:manipulation;overflow-x:hidden}
