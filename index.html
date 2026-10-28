@@ -40,6 +40,10 @@ h3{font-size:.72rem;text-transform:uppercase;letter-spacing:1.3px;color:var(--mu
 .c{border-radius:5px;background:var(--cell);position:relative}
 .blk{background:var(--col);box-shadow:inset 0 -4px 0 rgba(0,0,0,.28),inset 0 3px 0 rgba(255,255,255,.35),inset 3px 0 0 rgba(255,255,255,.12)}
 .c.ghost{background:var(--col);opacity:.45}
+/* Vista previa de ruptura: las líneas que se romperían toman el color de la pieza y "respiran" el brillo */
+.c.pre{--col:var(--pcol);background:var(--pcol);opacity:1;animation:breathe .9s ease-in-out infinite}
+.c.pre.blk,.c.pre.ghost{box-shadow:inset 0 -4px 0 rgba(0,0,0,.28),inset 0 3px 0 rgba(255,255,255,.35),0 0 8px var(--pcol)}
+@keyframes breathe{0%,100%{filter:brightness(1.05)}50%{filter:brightness(.5)}}
 .c.hint{box-shadow:inset 0 0 0 2px var(--gold)}
 .c.best{outline:2px dashed var(--gold);outline-offset:-3px}
 .c.missed{outline:2px dashed var(--c-opt);outline-offset:-3px}
@@ -152,7 +156,7 @@ tbody tr:hover{background:rgba(255,255,255,.04)}
 .note{font-size:.84rem;line-height:1.5;color:var(--fg)}
 .note em{font-style:normal;color:var(--gold)}
 .foot{font-size:.72rem;color:var(--muted);line-height:1.45}
-@media (prefers-reduced-motion:reduce){.c.pop,#combo.show{animation:none} #fb{transition:none}}
+@media (prefers-reduced-motion:reduce){.c.pop,#combo.show,.c.pre{animation:none} .c.pre{filter:brightness(.7)} #fb{transition:none}}
 </style>
 </head>
 <body>
@@ -451,6 +455,8 @@ function render(preview){
     if(board[i]==null && hint.has(i)) e.classList.add('hint');
     if(preview && preview.best && preview.best.has(i)) e.classList.add('best');
     if(flash && flash.has(i)) e.classList.add('missed');
+    if(preview && preview.pre && preview.pre.has(i)){ e.classList.add('pre'); e.style.setProperty('--pcol',preview.col); }
+    else e.style.removeProperty('--pcol');
   }
   $('#score').textContent=score; $('#best').textContent=best;
   const st=[`<span>Tandas <b>${sets}</b></span>`, `<span>Líneas <b>${lines}</b></span>`];
@@ -527,7 +533,13 @@ function moveDrag(e){
   dragEl.style.transform=`translate(${x}px,${y}px)`;
   const br=boardEl.getBoundingClientRect();
   const c=Math.round((x-br.left-6)/(cs+3)), r=Math.round((y-br.top-6)/(cs+3));
-  if(fits(occ(board),s,r,c)){ drag.pos=[r,c]; render({set:cellsOf(s,r,c), col:s.col, best:drag.bestSet}); }
+  const o=occ(board);
+  if(fits(o,s,r,c)){
+    drag.pos=[r,c];
+    // Qué filas/columnas se romperían si la soltás acá
+    const pre=new Set(placeO(o,s,r,c).cleared);
+    render({set:cellsOf(s,r,c), col:s.col, best:drag.bestSet, pre});
+  }
   else { drag.pos=null; render({set:new Set(), best:drag.bestSet}); }
 }
 function endDrag(e){
