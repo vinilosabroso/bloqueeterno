@@ -92,6 +92,10 @@ button:focus-visible,select:focus-visible,input:focus-visible,textarea:focus-vis
 /* Historial */
 .hist{display:flex;flex-direction:column;gap:12px}
 .hist-head{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+.tag{display:inline-block;font-size:.6rem;font-weight:800;text-transform:uppercase;letter-spacing:.8px;border-radius:5px;padding:1px 5px;margin-left:6px;vertical-align:1px}
+.tag.hinted{background:rgba(255,207,63,.16);color:var(--gold)}
+.tag.unk{background:var(--board);color:var(--muted)}
+.delrow{display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:.84rem}
 .empty{font-size:.85rem;color:var(--muted);line-height:1.5}
 .chart{width:100%;overflow-x:auto}
 .chart svg{display:block;width:100%;height:auto}
@@ -233,12 +237,15 @@ const SHAPES = [
   {id:'Z-v',  name:'Z vertical',    col:'#3a6ff0', cells:[[0,0],[1,0],[1,1],[2,1]]},
   {id:'I4-v', name:'Barra de 4',    col:'#e22b3a', cells:[[0,0],[1,0],[2,0],[3,0]]},
   {id:'L',    name:'L',             col:'#3d64ee', cells:[[0,0],[1,0],[2,0],[2,1]]},
+  // Va al final para no cambiar el índice de color de partidas guardadas
+  {id:'R23',  name:'Rectángulo 2×3', col:'#19b9a4', cells:[[0,0],[0,1],[1,0],[1,1],[2,0],[2,1]]},
 ];
 SHAPES.forEach((s,k)=>{ s.k=k; s.h=Math.max(...s.cells.map(c=>c[0]))+1; s.w=Math.max(...s.cells.map(c=>c[1]))+1; });
 const BY_ID = Object.fromEntries(SHAPES.map(s=>[s.id,s]));
 const DOT = BY_ID['dot'], O3 = BY_ID['O3'];
 // Peso de aparición: las piezas chicas no deberían salir tanto, si no el juego es trivial
-const WEIGHT = {'dot':0.5,'O3':0.8,'diag':0.8};
+// 1 = frecuencia normal. El Punto sale muy poco; el rectángulo 2×3 un poco más que una pieza normal.
+const WEIGHT = {'dot':0.2,'O3':0.8,'diag':0.8,'R23':1.2};
 
 // Tablero lógico para el motor: Uint8Array(64), 0 vacío / 1 ocupado
 function fits(o,s,r,c){
@@ -595,7 +602,7 @@ function commit(i,r,c){
 function recordMove(v, s, i, r, c, before, res, beforeStr, swapped){
   const after=res.o, nAfter=after.reduce((a,x)=>a+x,0);
   const mv={p:s.id, loss:+v.loss.toFixed(2), cat:v.cat, ord:v.orderErr?1:0, acc:+v.acc.toFixed(1),
-    holes:Math.max(0, holes(after)-holes(before)), no3:anyFit(after,O3)?0:1, fill:nAfter, sw:swapped?1:0};
+    holes:Math.max(0, holes(after)-holes(before)), no3:anyFit(after,O3)?0:1, fill:nAfter, sw:swapped?1:0, h:live()?1:0};
   game.moves.push(mv);
   // Peor jugada: guardamos la foto del tablero para poder repetirla en el balance
   if(!game.worst || v.loss>game.worst.loss){
@@ -681,7 +688,8 @@ function summarize(g, pts, lns, sts){
   // La pérdida se topea en 20 para que una sola jugada desesperada no defina la pieza.
   const pc={}; m.filter(x=>!x.sw).forEach(x=>{ (pc[x.p]=pc[x.p]||{n:0,loss:0,bad:0}); pc[x.p].n++; pc[x.p].loss+=Math.min(20,x.loss); if(x.cat==='imprecisa'||x.cat==='error') pc[x.p].bad++; });
   let worstPiece=null; for(const [id,v] of Object.entries(pc)) if(v.n>=3 && (!worstPiece || v.loss/v.n>worstPiece.avg)) worstPiece={id,avg:v.loss/v.n,n:v.n,bad:v.bad};
-  return {id:g.start, date:new Date().toISOString(), start:g.start, n, points:pts, lines:lns, sets:sts, saves:g.saves,
+  const hint=+(100*m.filter(x=>x.h).length/n).toFixed(0);   // % de jugadas hechas con pistas en vivo
+  return {id:g.start, date:new Date().toISOString(), start:g.start, n, hint, points:pts, lines:lns, sets:sts, saves:g.saves,
     global:+global.toFixed(1), dec:+dec.toFixed(1), ord:+ord.toFixed(1), sup:+sup.toFixed(1), sal:+sal.toFixed(1),
     dec1:+dec1.toFixed(1), dec2:+dec2.toFixed(1), cats, ordErr, holes:holesC, no3, worstPiece, pieces:pc, worst:g.worst};
 }
@@ -749,12 +757,21 @@ function showBalance(s, fresh){
       <div class="kpi"><b>${s.no3}</b><span>Jugadas que te dejaron sin lugar para el 3×3</span></div>
       <div class="kpi wide"><b>${wp?nameOf(wp.id):'—'}</b><span>${wp?`Pieza problemática: pierde ${wp.avg.toFixed(1)} en promedio, ${wp.bad} de ${wp.n} jugadas imprecisas o errores`:'Pieza problemática: ninguna se usó 3 veces o más'}</span></div>
       <div class="kpi wide"><b style="font-size:1.05rem">${fatigue}</b><span>Precisión: 1ª mitad vs 2ª mitad de la partida</span></div>
+      <div class="kpi wide"><b style="font-size:1.05rem">${s.hint==null?'Sin dato':s.hint===0?'Sin pistas':s.hint+'% de las jugadas'}</b><span>Uso de pistas en vivo${s.hint>0?' · no refleja solo tus decisiones':''}</span></div>
     </div>
     ${worstHtml}
-    <p class="foot">Contexto: ${s.lines} líneas en ${s.sets} tandas. El global pondera Decisiones 50%, Supervivencia 20%, Orden 15% y Salud del tablero 15%; los puntos del juego no entran, por eso una partida con menos puntos puede puntuar mejor. Cada jugada se compara con la mejor posible usando solo lo que veías: el tablero y las piezas de esa tanda.</p>`;
+    <p class="foot">Contexto: ${s.lines} líneas en ${s.sets} tandas. El global pondera Decisiones 50%, Supervivencia 20%, Orden 15% y Salud del tablero 15%; los puntos del juego no entran, por eso una partida con menos puntos puede puntuar mejor. Cada jugada se compara con la mejor posible usando solo lo que veías: el tablero y las piezas de esa tanda.</p>
+    <div class="delrow"><button type="button" id="balDel" class="ghost">Borrar esta partida del historial</button>
+      <span id="balConf" hidden>¿Seguro? <button type="button" id="balYes">Sí, borrar</button> <button type="button" id="balNo" class="ghost">No</button></span></div>`;
   $('#sheetWrap').hidden=false;
   $('#closeBal').focus();
   $('#closeBal').addEventListener('click',closeBalance);
+  $('#balDel').addEventListener('click',()=>{ $('#balConf').hidden=false; $('#balDel').hidden=true; });
+  $('#balNo').addEventListener('click',()=>{ $('#balConf').hidden=true; $('#balDel').hidden=false; });
+  $('#balYes').addEventListener('click',()=>{
+    hist=hist.filter(h=>h.id!==s.id); saveHist(); closeBalance();
+    $('#hMsg').textContent=`Partida del ${dateTxt(s.date)} borrada.`;
+  });
 }
 function closeBalance(){ $('#sheetWrap').hidden=true; }
 $('#sheetWrap').addEventListener('click',e=>{ if(e.target.id==='sheetWrap') closeBalance(); });
@@ -763,14 +780,27 @@ document.addEventListener('keydown',e=>{ if(e.key==='Escape' && !$('#sheetWrap')
 // ======================================================================
 // Historial: tendencia, patrones y tabla
 // ======================================================================
+// Partidas con pistas: inflan el puntaje porque las decisiones no son del todo tuyas
+const hintKind=h=> h.hint==null ? 'unk' : h.hint===0 ? 'clean' : 'hinted';
+let hFilter = store.get('be-hfilter') || 'clean';
 function renderHist(){
-  const body=$('#hBody'), H=[...hist].sort((a,b)=>a.date<b.date?-1:1);
-  $('#hCount').textContent = H.length ? `${H.length} ${H.length===1?'partida':'partidas'}` : '';
+  const body=$('#hBody');
+  const H=[...hist].filter(h=> hFilter==='all' || hintKind(h)===hFilter).sort((a,b)=>a.date<b.date?-1:1);
+  $('#hCount').textContent = hist.length ? `${H.length} de ${hist.length} ${hist.length===1?'partida':'partidas'}` : '';
+  const filt = hist.length ? `<label class="tg" for="hFilter">Mostrar <select id="hFilter">
+      <option value="clean"${hFilter==='clean'?' selected':''}>Solo sin pistas</option>
+      <option value="hinted"${hFilter==='hinted'?' selected':''}>Solo con pistas</option>
+      <option value="all"${hFilter==='all'?' selected':''}>Todas</option></select></label>` : '';
+  if(hist.length && !H.length){
+    body.innerHTML = filt + `<p class="empty">No hay partidas en este filtro. ${hFilter==='clean'?'Jugá en Tutor con “Pistas en vivo” apagado para medir solo tus decisiones.':''}</p>`;
+    bindFilter(); return;
+  }
   if(!H.length){
     body.innerHTML=`<p class="empty">Todavía no hay partidas. Jugá en modo <b>Tutor</b> y tocá “Terminar y ver balance” (mínimo ${MIN_MOVES} jugadas). Cada partida queda guardada con fecha en este dispositivo.</p>`;
     return;
   }
-  body.innerHTML = chartSVG(H.slice(-30)) + patternsHTML(H) + tableHTML([...H].reverse());
+  body.innerHTML = filt + chartSVG(H.slice(-30)) + patternsHTML(H) + tableHTML([...H].reverse());
+  bindFilter();
   body.querySelectorAll('tbody tr').forEach(tr=>{
     const open=()=>{ const s=hist.find(h=>h.id===tr.dataset.id); if(s) showBalance(s,false); };
     tr.addEventListener('click',open);
@@ -793,6 +823,7 @@ function chartSVG(H){
   return `<div><h3>Tendencia · últimas ${H.length}</h3><div class="chart"><svg viewBox="0 0 ${W} ${Hh}" role="img" aria-label="Puntaje global y decisiones por partida">${grid}${line('dec','var(--muted)',1.5)}${line('global','var(--gold)',2.5)}${lbl}</svg></div>
     <div class="legend"><span><i style="background:var(--gold)"></i>Global</span><span><i style="background:var(--muted)"></i>Decisiones</span></div></div>`;
 }
+function bindFilter(){ const f=$('#hFilter'); if(f) f.addEventListener('change',()=>{ hFilter=f.value; store.set('be-hfilter',hFilter); renderHist(); }); }
 function patternsHTML(H){
   const out=[], avg=a=>a.reduce((x,y)=>x+y,0)/a.length;
   if(H.length<3){ return `<div class="patterns"><h3>Patrones</h3><p class="empty">Con 3 partidas o más aparecen los patrones (tendencia, pieza problemática, cansancio, momento del día).</p></div>`; }
@@ -822,7 +853,7 @@ function patternsHTML(H){
 function tableHTML(H){
   const col=v=>v>=80?'var(--c-opt)':v>=65?'var(--c-good)':v>=50?'var(--c-imp)':'var(--c-err)';
   const rows=H.map(h=>{ const d=new Date(h.date);
-    return `<tr tabindex="0" data-id="${h.id}"><td>${d.toLocaleDateString('es-AR',{day:'numeric',month:'short'})} ${d.toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'})}</td>
+    return `<tr tabindex="0" data-id="${h.id}"><td>${d.toLocaleDateString('es-AR',{day:'numeric',month:'short'})} ${d.toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'})}${hintKind(h)==='hinted'?`<span class="tag hinted">pistas ${h.hint}%</span>`:hintKind(h)==='unk'?'<span class="tag unk">sin dato</span>':''}</td>
       <td><span class="gpill" style="color:${col(h.global)}">${fmt(h.global)}</span></td><td>${fmt(h.dec)}</td><td>${h.points}</td><td>${h.saves}</td><td>${h.n}</td></tr>`; }).join('');
   return `<div><h3>Partidas · tocá una para ver su balance</h3><div class="tbl"><table>
     <thead><tr><th>Fecha</th><th>Global</th><th>Decis.</th><th>Puntos</th><th>Vidas</th><th>Jug.</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
