@@ -150,6 +150,23 @@ tbody tr:hover{background:rgba(255,255,255,.04)}
 .kpi span{font-size:.72rem;color:var(--muted);line-height:1.3}
 .kpi.wide{grid-column:1/-1}
 .replay{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.replay.one{grid-template-columns:minmax(0,1fr);max-width:220px}
+/* Registro jugada a jugada */
+details.log>summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px}
+details.log>summary::-webkit-details-marker,details.mv>summary::-webkit-details-marker{display:none}
+details.log>summary::before{content:"▸";color:var(--muted);font-size:.8rem}
+details.log[open]>summary::before{content:"▾"}
+.logtools{margin-top:10px}
+.mvlist{display:flex;flex-direction:column;gap:4px;margin-top:10px}
+details.mv{background:var(--board);border-radius:8px}
+details.mv>summary{display:grid;grid-template-columns:24px minmax(0,1fr) auto auto;gap:10px;align-items:center;padding:8px 10px;cursor:pointer;list-style:none;font-size:.82rem}
+details.mv>summary:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+.mvn,.mvpts{color:var(--muted);font-variant-numeric:tabular-nums}
+.mvp{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pill{font-size:.68rem;font-weight:800;color:var(--k);border:1px solid var(--k);border-radius:999px;padding:1px 8px;white-space:nowrap}
+.mvbody{padding:4px 10px 12px;display:flex;flex-direction:column;gap:8px}
+.mv .mb{background:var(--sheet)}
+.mb i.hit{background:var(--gold);box-shadow:0 0 0 1px #fff inset}
 .rb{display:flex;flex-direction:column;gap:6px;min-width:0}
 .rb span{font-size:.72rem;color:var(--muted);font-weight:800;text-transform:uppercase;letter-spacing:1px}
 .mb{display:grid;grid-template-columns:repeat(8,1fr);gap:2px;background:var(--board);padding:4px;border-radius:8px;aspect-ratio:1;max-width:100%}
@@ -601,7 +618,9 @@ function commit(i,r,c){
 }
 function recordMove(v, s, i, r, c, before, res, beforeStr, swapped){
   const after=res.o, nAfter=after.reduce((a,x)=>a+x,0);
-  const mv={p:s.id, loss:+v.loss.toFixed(2), cat:v.cat, ord:v.orderErr?1:0, acc:+v.acc.toFixed(1),
+  const bst=analysis.best;
+  // Foto del tablero antes de la jugada + sugerencia del motor + puntos que sumó, para el registro jugada a jugada
+  const mv={b:beforeStr, pos:[r,c], bp:tray[bst.slot].id, bpos:bst.pos, pts:s.cells.length+res.n*10*res.n, ln:res.n, p:s.id, loss:+v.loss.toFixed(2), cat:v.cat, ord:v.orderErr?1:0, acc:+v.acc.toFixed(1),
     holes:Math.max(0, holes(after)-holes(before)), no3:anyFit(after,O3)?0:1, fill:nAfter, sw:swapped?1:0, h:live()?1:0};
   game.moves.push(mv);
   // Peor jugada: guardamos la foto del tablero para poder repetirla en el balance
@@ -691,7 +710,8 @@ function summarize(g, pts, lns, sts){
   const hint=+(100*m.filter(x=>x.h).length/n).toFixed(0);   // % de jugadas hechas con pistas en vivo
   return {id:g.start, date:new Date().toISOString(), start:g.start, n, hint, points:pts, lines:lns, sets:sts, saves:g.saves,
     global:+global.toFixed(1), dec:+dec.toFixed(1), ord:+ord.toFixed(1), sup:+sup.toFixed(1), sal:+sal.toFixed(1),
-    dec1:+dec1.toFixed(1), dec2:+dec2.toFixed(1), cats, ordErr, holes:holesC, no3, worstPiece, pieces:pc, worst:g.worst};
+    dec1:+dec1.toFixed(1), dec2:+dec2.toFixed(1), cats, ordErr, holes:holesC, no3, worstPiece, pieces:pc, worst:g.worst,
+    log:m.map(x=>({b:x.b,pos:x.pos,bp:x.bp,bpos:x.bpos,p:x.p,cat:x.cat,loss:x.loss,ord:x.ord,pts:x.pts,ln:x.ln,h:x.h}))};
 }
 function finishGame(){
   if(mode!=='tutor') return;
@@ -724,13 +744,21 @@ function showBalance(s, fresh){
   const w=s.worst;
   let worstHtml='';
   if(w){
-    const why = w.ord ? `El problema fue el orden: convenía arrancar con <em>${nameOf(w.bp)}</em>.` : `La <em>${nameOf(w.p)}</em> tenía un lugar mejor.`;
+    const why = w.ord ? `El problema fue el orden: convenía arrancar con <em>${nameOf(w.bp)}</em>.` : `La pieza <em>${nameOf(w.p)}</em> tenía un lugar mejor.`;
     worstHtml=`<div><h3>Peor jugada · nº ${w.n}</h3></div>
       <div class="replay">
         <div class="rb"><span>Lo que hiciste</span>${miniBoard(w.board,w.p,w.pos,'you')}</div>
         <div class="rb"><span>La mejor</span>${miniBoard(w.board,w.bp,w.bpos,'opt')}</div>
       </div>
       <p class="note">${why} Te costó ${w.loss.toFixed(1)} puntos de evaluación.</p>`;
+  }
+  let topHtml='';
+  if(s.log && s.log.length){
+    let k=0; s.log.forEach((x,j)=>{ if(x.pts>s.log[k].pts) k=j; });
+    const x=s.log[k];
+    topHtml=`<div><h3>Jugada que más puntos aportó · nº ${k+1}</h3></div>
+      <div class="replay one"><div class="rb"><span>+${x.pts} pts${x.ln?` · ${x.ln} ${x.ln===1?'línea':'líneas'}`:''}</span>${miniBoard(x.b,x.p,x.pos,'hit')}</div></div>
+      <p class="note">La pieza <em>${nameOf(x.p)}</em> en esa posición ${x.ln?`rompió ${x.ln===1?'una línea':x.ln+' líneas a la vez'}`:'sumó sus bloques'}. Calificación del motor: ${CAT[x.cat].t.toLowerCase()}.</p>`;
   }
   const wp=s.worstPiece;
   const fatigue = s.dec2 < s.dec1-5 ? `Bajó en la 2ª mitad (${fmt(s.dec1)} → ${fmt(s.dec2)})` : s.dec2 > s.dec1+5 ? `Mejoró en la 2ª mitad (${fmt(s.dec1)} → ${fmt(s.dec2)})` : `Pareja en toda la partida (${fmt(s.dec1)} / ${fmt(s.dec2)})`;
@@ -760,18 +788,56 @@ function showBalance(s, fresh){
       <div class="kpi wide"><b style="font-size:1.05rem">${s.hint==null?'Sin dato':s.hint===0?'Sin pistas':s.hint+'% de las jugadas'}</b><span>Uso de pistas en vivo${s.hint>0?' · no refleja solo tus decisiones':''}</span></div>
     </div>
     ${worstHtml}
+    ${topHtml}
+    ${logHTML(s)}
     <p class="foot">Contexto: ${s.lines} líneas en ${s.sets} tandas. El global pondera Decisiones 50%, Supervivencia 20%, Orden 15% y Salud del tablero 15%; los puntos del juego no entran, por eso una partida con menos puntos puede puntuar mejor. Cada jugada se compara con la mejor posible usando solo lo que veías: el tablero y las piezas de esa tanda.</p>
     <div class="delrow"><button type="button" id="balDel" class="ghost">Borrar esta partida del historial</button>
       <span id="balConf" hidden>¿Seguro? <button type="button" id="balYes">Sí, borrar</button> <button type="button" id="balNo" class="ghost">No</button></span></div>`;
   $('#sheetWrap').hidden=false;
   $('#closeBal').focus();
   $('#closeBal').addEventListener('click',closeBalance);
+  bindLog(s);
   $('#balDel').addEventListener('click',()=>{ $('#balConf').hidden=false; $('#balDel').hidden=true; });
   $('#balNo').addEventListener('click',()=>{ $('#balConf').hidden=true; $('#balDel').hidden=false; });
   $('#balYes').addEventListener('click',()=>{
     hist=hist.filter(h=>h.id!==s.id); saveHist(); closeBalance();
     $('#hMsg').textContent=`Partida del ${dateTxt(s.date)} borrada.`;
   });
+}
+// ---------- Registro jugada a jugada ----------
+const differs=x=>!(x.bp===x.p && x.bpos && x.bpos[0]===x.pos[0] && x.bpos[1]===x.pos[1]);
+function logHTML(s){
+  if(!s.log) return `<div><h3>Jugada a jugada</h3><p class="empty">Esta partida se guardó antes de que existiera el registro por jugada.</p></div>`;
+  const rows=s.log.map((x,k)=>`<details class="mv" data-k="${k}"><summary>
+      <span class="mvn">${k+1}</span><span class="mvp">${nameOf(x.p)}${x.h?'<span class="tag hinted">pista</span>':''}</span>
+      <span class="mvpts">+${x.pts}</span><span class="pill" style="--k:${CAT[x.cat].k}">${CAT[x.cat].t}</span></summary><div class="mvbody"></div></details>`).join('');
+  const nd=s.log.filter(differs).length;
+  return `<details class="log"><summary><h3>Jugada a jugada · ${s.log.length}</h3></summary>
+    <div class="logtools"><label class="tg" for="onlyDiff"><input type="checkbox" id="onlyDiff"> Solo las que no coinciden con el motor (${nd})</label></div>
+    <div class="mvlist">${rows}</div></details>`;
+}
+function mvBody(x){
+  const ln = x.ln ? ` Rompió ${x.ln===1?'una línea':x.ln+' líneas'}.` : '';
+  if(!differs(x)) return `<div class="replay one"><div class="rb"><span>Tu jugada · coincide con el motor</span>${miniBoard(x.b,x.p,x.pos,'opt')}</div></div>
+    <p class="note">+${x.pts} pts.${ln}</p>`;
+  const equal = x.loss<=CUT.optima;
+  const why = equal ? 'Elegiste una alternativa igual de buena que la sugerida.'
+    : x.ord ? `Convenía empezar por la pieza <em>${nameOf(x.bp)}</em>.`
+    : x.bp===x.p ? `La pieza <em>${nameOf(x.p)}</em> tenía un lugar mejor.`
+    : `El motor sugería otra jugada: la pieza <em>${nameOf(x.bp)}</em> en el lugar marcado.`;
+  return `<div class="replay">
+      <div class="rb"><span>Lo que hiciste</span>${miniBoard(x.b,x.p,x.pos,equal?'opt':'you')}</div>
+      <div class="rb"><span>Sugerencia del motor</span>${miniBoard(x.b,x.bp,x.bpos,'opt')}</div></div>
+    <p class="note">${why}${equal?'':` Costó ${x.loss.toFixed(1)} puntos de evaluación.`} +${x.pts} pts.${ln}</p>`;
+}
+function bindLog(s){
+  if(!s.log) return;
+  // Las fotos se arman recién al abrir cada jugada: una partida larga tendría miles de celdas
+  $('#sheet').querySelectorAll('details.mv').forEach(d=>{
+    d.querySelector('summary').addEventListener('click',()=>{ const b=d.querySelector('.mvbody'); if(!b.innerHTML) b.innerHTML=mvBody(s.log[+d.dataset.k]); });
+  });
+  const od=$('#onlyDiff');
+  if(od) od.addEventListener('change',()=>{ $('#sheet').querySelectorAll('details.mv').forEach(d=>{ d.hidden = od.checked && !differs(s.log[+d.dataset.k]); }); });
 }
 function closeBalance(){ $('#sheetWrap').hidden=true; }
 $('#sheetWrap').addEventListener('click',e=>{ if(e.target.id==='sheetWrap') closeBalance(); });
@@ -835,7 +901,7 @@ function patternsHTML(H){
   // Pieza problemática acumulada
   const agg={}; H.forEach(h=>Object.entries(h.pieces||{}).forEach(([id,v])=>{ (agg[id]=agg[id]||{n:0,loss:0}); agg[id].n+=v.n; agg[id].loss+=v.loss; }));
   const ranked=Object.entries(agg).filter(([,v])=>v.n>=8).map(([id,v])=>({id,avg:v.loss/v.n,n:v.n})).sort((a,b)=>b.avg-a.avg);
-  if(ranked.length>=2) out.push(`Tu pieza más difícil es la <b>${nameOf(ranked[0].id)}</b> (pierde ${ranked[0].avg.toFixed(1)} por jugada en ${ranked[0].n} usos); la que mejor manejás es la ${nameOf(ranked[ranked.length-1].id)}.`);
+  if(ranked.length>=2) out.push(`Tu pieza más difícil: <b>${nameOf(ranked[0].id)}</b> (pierde ${ranked[0].avg.toFixed(1)} por jugada en ${ranked[0].n} usos). La que mejor manejás: ${nameOf(ranked[ranked.length-1].id)}.`);
   // Cansancio: ¿la precisión cae en la segunda mitad?
   const drops=H.filter(h=>h.dec2<h.dec1-5).length;
   out.push(drops>=H.length/2 ? `En ${drops} de ${H.length} partidas tu precisión cae en la segunda mitad: probablemente te conviene cortar antes o bajar el ritmo.`
