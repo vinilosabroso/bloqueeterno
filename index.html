@@ -1718,7 +1718,7 @@ function modeStats(){
   const st=[];
   if(mode==='eterno') st.push(`<span>Tandas <b>${sets}</b></span>`,`<span>Líneas <b>${lines}</b></span>`,`<span>Rescates <b>${rescues}</b></span>`);
   if(mode==='survival') st.push(`<span>Vidas <b class="lives">${'♥'.repeat(Math.max(0,lives))}${'♡'.repeat(Math.max(0,3-lives))}</b></span>`,`<span>Líneas <b>${lines}</b></span>`);
-  if(mode==='duelo') st.push(`<span>Tanda <b>${Math.min(X.setIdx,X.N)} de ${X.N}</b></span>`,`<span>Tus vidas perdidas <b>${X.lost}</b></span>`);
+  if(mode==='duelo') st.push(`<span>Tanda <b>${Math.min(X.setIdx,X.N)} de ${X.N}</b></span>`,`<span>Tus vidas perdidas <b>${X.lost}</b></span>`,`<span>Descontado <b>${X.pen?'−'+X.pen:0}</b></span>`);
   if(mode==='puzzle') st.push(`<span>Intentos <b>${X.tries}</b></span>`,`<span>Pistas <b>${X.hints}</b></span>`);
   if(BONUS_MODES.includes(mode)) st.push(`<span>Racha <b>${streak}</b></span>`,`<span>Mejor racha <b>${bestStreak}</b></span>`,`<span>Líneas de color <b>${colorLines}</b></span>`);
   return st.join('');
@@ -1748,7 +1748,10 @@ function modeStuck(idx){
   } else {
     // Duelo: la misma regla que se le aplica al motor, para que sea parejo
     X.lost++; idx.forEach(i=>tray[i]=DOT); rescued=new Set(idx);
-    log('Te trabaste: perdés una vida y esas piezas pasan a ser Puntos. Al motor le aplica la misma regla.');
+    const k=stuckPenalty(X.ts, score-X.ts.sc); score-=k.pen; X.pen=(X.pen||0)+k.pen;
+    log(k.unavoidable ? 'Te trabaste, pero con ese tablero y esas piezas el motor también se trababa: perdés la vida sin descuento.'
+      : `Te trabaste: −${k.pen} pts. Con esa bandeja el motor sumaba ${k.ref} y vos llevabas ${k.ref-k.pen}. Esas piezas pasan a ser Puntos.`);
+    const cb=$('#combo'); cb.textContent=`−${k.pen}`; cb.classList.remove('show'); void cb.offsetWidth; cb.classList.add('show');
   }
 }
 
@@ -1792,13 +1795,36 @@ function duelInit(seed){
   X.eng={b:Array(64).fill(null), set:0, rest:[], score:0, lost:0, moves:0};
   if(duelKind==='daily'){ const d=dailyRec(); d.tries++; saveDaily(d); }
 }
-function duelNextSet(){ return X.seq[X.setIdx++].map(id=>BY_ID[id]); }
+function duelNextSet(){
+  const ids=X.seq[X.setIdx++];
+  X.ts={b:board.map(v=>v==null?0:1), ids, sc:score};      // foto al empezar la tanda: referencia para el descuento
+  return ids.map(id=>BY_ID[id]);
+}
+// Puntos que suma el mejor plan del motor con una bandeja (misma búsqueda que el motor) y si alguna pieza queda sin lugar
+function planPts(o, pieces){
+  if(!pieces.length) return {val:health(o), pts:0, dead:0};
+  const cands=[], seen=new Set();
+  pieces.forEach((s,i)=>{ if(seen.has(s.id)) return; seen.add(s.id); const rest=pieces.filter((_,j)=>j!==i);
+    for(let r=0;r<=N-s.h;r++) for(let c=0;c<=N-s.w;c++){ if(!fits(o,s,r,c)) continue;
+      const p=placeO(o,s,r,c); cands.push({o:p.o, n:p.n, s, rest, q:p.n*LW+health(p.o)}); } });
+  if(!cands.length) return {val:health(o)-DEAD*pieces.length, pts:0, dead:pieces.length};
+  cands.sort((a,b)=>b.q-a.q); let best=null;
+  for(const x of cands.slice(0,BEAM)){ const sub=planPts(x.o,x.rest), v=x.n*LW+sub.val;
+    if(!best || v>best.val) best={val:v, pts:x.s.cells.length+x.n*10*x.n+sub.pts, dead:sub.dead}; }
+  return best;
+}
+// Descuento al trabarse: lo que el motor sumaba con esa bandeja desde el tablero inicial, menos lo que sumaste vos.
+// Si el motor también se trababa con ese tablero y esas piezas, la vida no se podía salvar y no se descuenta nada.
+function stuckPenalty(ts, made){
+  const ref=planPts(Uint8Array.from(ts.b), ts.ids.map(id=>BY_ID[id]));
+  return {pen: ref.dead ? 0 : Math.max(0, ref.pts-made), ref:ref.pts, unavoidable:!!ref.dead};
+}
 function engineStep(){
   const e=X.eng; if(e.moves>=X.N*3) return;
-  if(!e.rest.length) e.rest=X.seq[e.set++].slice();
+  if(!e.rest.length){ const ids=X.seq[e.set++]; e.rest=ids.slice(); e.ts={b:e.b.map(v=>v==null?0:1), ids, sc:e.score}; }
   const o=new Uint8Array(64); e.b.forEach((v,i)=>o[i]=v==null?0:1);
   let P=e.rest.map(id=>BY_ID[id]);
-  if(!P.some(s=>anyFit(o,s))){ e.lost++; e.rest=e.rest.map(()=>'dot'); P=e.rest.map(id=>BY_ID[id]); }
+  if(!P.some(s=>anyFit(o,s))){ e.lost++; const k=stuckPenalty(e.ts, e.score-e.ts.sc); e.score-=k.pen; e.pen=(e.pen||0)+k.pen; e.rest=e.rest.map(()=>'dot'); P=e.rest.map(id=>BY_ID[id]); }
   const A=analyze(o, P.map((s,i)=>({i,s}))), s=P[A.best.slot], [r,c]=A.best.pos, res=placeO(o,s,r,c);
   s.cells.forEach(([a,b])=>e.b[(r+a)*N+c+b]=s.k); res.cleared.forEach(k=>e.b[k]=null);
   e.score+=s.cells.length+res.n*10*res.n; e.moves++; e.rest.splice(A.best.slot,1);
@@ -1819,7 +1845,7 @@ function renderDuel(){
   if(box.hidden) return;
   const e=X.eng, diff=score-e.score;
   $('#engScore').textContent=e.score;
-  $('#engInfo').textContent=`${e.moves} de ${X.N*3} jugadas · vidas perdidas ${e.lost}`;
+  $('#engInfo').textContent=`${e.moves} de ${X.N*3} jugadas · vidas perdidas ${e.lost}${e.pen?` · −${e.pen}`:''}`;
   $('#duelDiff').textContent = X.pm ? (diff>0?`Vas ganando por ${diff}`:diff<0?`Vas perdiendo por ${-diff}`:'Van empatados') : 'Tu turno';
   $('#duelDiff').style.color = diff>0?'var(--c-opt)':diff<0?'var(--c-err)':'var(--muted)';
   $('#engBoard').innerHTML=e.b.map(v=>v==null?'<i></i>':`<i class="on" style="--col:${SHAPES[v].col}"></i>`).join('');
@@ -1843,9 +1869,11 @@ function duelCheckEnd(){
       <div class="kpi"><b>${e.score}</b><span>Puntos del motor</span></div>
       <div class="kpi"><b>${X.lost}</b><span>Tus vidas perdidas</span></div>
       <div class="kpi"><b>${e.lost}</b><span>Vidas perdidas del motor</span></div>
+      <div class="kpi"><b>${X.pen?'−'+X.pen:0}</b><span>Tu descuento por trabarte</span></div>
+      <div class="kpi"><b>${e.pen?'−'+e.pen:0}</b><span>Descuento del motor</span></div>
       <div class="kpi wide"><b>${diff>0?'+':''}${diff}</b><span>Diferencia${rec?' · '+rec:''}</span></div>
     </div>
-    <p class="foot">Las mismas tandas para los dos y la misma regla al trabarse (perdés una vida y esas piezas pasan a ser Puntos). Gana el que suma más puntos.</p>
+    <p class="foot">Las mismas tandas para los dos y la misma regla al trabarse: perdés una vida, esas piezas pasan a ser Puntos y se descuenta lo que el motor sumaba con esa bandeja desde el tablero inicial menos lo que habías sumado. Si el motor también se trababa, no hay descuento. Los puntos ya incluyen los descuentos.</p>
     <div class="tools"><button type="button" id="again" class="primary">Revancha con las mismas piezas</button>${X.kind==='free'?'<button type="button" id="newDuel">Duelo nuevo</button>':''}</div>`,
     ()=>{ const seed=X.seed;
       $('#again').addEventListener('click',()=>{ closeBalance(); startGame('duelo', seed); });
