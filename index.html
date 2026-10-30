@@ -1135,7 +1135,8 @@ function rates(games){
     if(x.sw) return; n++;
     const tg=x.tg||[]; if(x.loss<=CUT.optima) return;
     if(!tg.length){ if(x.loss>CUT.buena) otro++; return; }
-    const part=Math.min(32,x.loss)/tg.length;
+    // Tope de 32 para que una jugada desesperada no defina todo, salvo la bandeja trabada: ahí la pérdida enorme es real (es perder)
+    const part=(tg.includes('block') ? x.loss : Math.min(32,x.loss))/tg.length;
     tg.forEach(k=>{ if(c[k]){ c[k].cost+=part; c[k].cnt++; } });
   }));
   const out={n, otro}; for(const k in c) out[k]={per100: n ? 100*c[k].cost/n : 0, cnt:c[k].cnt};
@@ -1370,7 +1371,7 @@ function buildReport(){
       vida_salvada:'momento en que el juego real habría terminado (ninguna pieza entraba) y se cambiaron piezas para seguir',
       puntos_por_vida:'puntos de la partida divididos por la cantidad de vidas (rescates + 1); la última vida no terminó en derrota sino porque el jugador cerró la partida',
       causas:Object.fromEntries(Object.values(CAUSE).map(c=>[c.t, c.tip])),
-      costo_cada_100:'suma de pérdidas (tope 32 por jugada) atribuidas a una causa, cada 100 jugadas'
+      costo_cada_100:'suma de pérdidas atribuidas a una causa, cada 100 jugadas (tope 32 por jugada, salvo en Te trabaste la bandeja)'
     },
     piezas:ACTIVE.map(s=>({nombre:s.name, frecuencia_pct:+(100*wOf(s)/W_TOT).toFixed(1), forma:shape(s)})),
     coach: st.ready ? {foco_actual:CAUSE[coach.focus].t, desde:coach.since, costo_base_cada_100:r1(coach.base),
