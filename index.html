@@ -92,6 +92,18 @@ button:focus-visible,select:focus-visible,input:focus-visible,textarea:focus-vis
 .duelside b{font-family:var(--display);font-weight:400;font-size:1.7rem;line-height:1;font-variant-numeric:tabular-nums}
 .duelside #duelDiff{font-weight:800;font-size:.85rem}
 .lives{color:var(--c-err);letter-spacing:2px}
+.lives-top{display:flex;justify-content:center;gap:10px;font-size:1.9rem;line-height:1;margin-block:-4px -2px}
+.heart{color:#ff3b4e;text-shadow:0 2px 0 rgba(0,0,0,.35),0 0 12px rgba(255,59,78,.45);transition:opacity .35s,filter .35s,transform .35s}
+.heart.off{opacity:.22;filter:grayscale(1);text-shadow:none;transform:scale(.85)}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+.shop{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;width:100%}
+.boost{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;padding:8px 10px}
+.boost b{font-size:.84rem}
+.boost small{font-size:.72rem;color:var(--gold);font-weight:800}
+.boost.on{border-color:var(--gold);box-shadow:0 0 0 1px var(--gold) inset}
+.boost:disabled{opacity:.45;cursor:not-allowed}
+#nextBox{display:flex;align-items:center;gap:14px;background:rgba(0,0,0,.18);border-radius:12px;padding:8px 12px;flex-wrap:wrap}
+#nextBox .fl{font-size:.66rem;text-transform:uppercase;letter-spacing:1.3px;color:var(--muted);font-weight:800}
 .seg button{border:0;background:transparent;color:var(--muted);font-weight:800;padding:6px 12px;border-radius:8px}
 .seg button[aria-pressed="true"]{background:var(--bg2);color:var(--fg)}
 .log{font-size:.78rem;color:var(--muted);min-height:1.2em}
@@ -217,8 +229,10 @@ details.mv>summary:focus-visible{outline:2px solid var(--gold);outline-offset:2p
     </div>
   </header>
 
+  <div class="lives-top" id="livesTop" hidden></div>
   <div id="board"><div id="combo"></div><div id="fb"></div></div>
   <div class="tray" id="tray"></div>
+  <div id="nextBox" hidden></div>
   <div class="duel" id="duelBox" hidden>
     <div class="duelside"><span class="fl">Motor · mismas piezas</span><b id="engScore">0</b><span id="duelDiff"></span><span class="foot" id="engInfo"></span></div>
     <div class="mb" id="engBoard" aria-label="Tablero del motor"></div>
@@ -243,6 +257,15 @@ details.mv>summary:focus-visible{outline:2px solid var(--gold);outline-offset:2p
     <div class="row" id="rowDuel" hidden>
       <div class="seg" role="group" aria-label="Tipo de duelo"><button type="button" id="dDaily" aria-pressed="true">Desafío del día</button><button type="button" id="dFree" aria-pressed="false">Duelo libre</button></div>
       <span class="foot" id="duelInfo"></span>
+    </div>
+    <div class="row" id="rowSurv" hidden>
+      <div class="shop" role="group" aria-label="Boosters">
+        <button type="button" class="boost" data-b="future" title="Ves la próxima tanda durante 3 tandas"><b>Ver el futuro</b><small></small></button>
+        <button type="button" class="boost" data-b="hammer" title="Tocá un bloque y se borra todo ese color"><b>Martillo de colores</b><small></small></button>
+        <button type="button" class="boost" data-b="mult" title="x2 por 5 jugadas; romper 2+ líneas lo sube hasta x8"><b>Multiplicador</b><small></small></button>
+        <button type="button" class="boost" data-b="served" title="El motor te sirve piezas para combos"><b>Piezas servidas</b><small></small></button>
+      </div>
+      <span class="foot" id="boostInfo"></span>
     </div>
     <div class="row" id="rowPuzzle" hidden>
       <div class="tools"><button type="button" id="pzRetry">Reintentar</button><button type="button" id="pzHint" class="ghost">Pista</button><button type="button" id="pzSkip" class="ghost">Otro puzzle</button></div>
@@ -577,7 +600,8 @@ function fitQuality(o,s){
 function generateSet(){
   const o=occ(board);
   if(mode==='duelo') return duelNextSet();
-  if(mode==='tutor' || mode==='survival') return [pickWeighted(),pickWeighted(),pickWeighted()];  // tandas reales, como el juego original
+  if(mode==='survival') return survivalSet();
+  if(mode==='tutor') return [pickWeighted(),pickWeighted(),pickWeighted()];  // tandas reales, como el juego original
   const cands=[];
   for(let t=0;t<120 && cands.length<10;t++){ const set=[pickWeighted(),pickWeighted(),pickWeighted()]; if(solvable(o,set)) cands.push(set); }
   if(!cands.length){
@@ -647,6 +671,7 @@ function render(preview){
   }
   $('#score').textContent = mode==='puzzle' ? X.level : score; $('#best').textContent = mode==='puzzle' ? pz.solved : best;
   if(drill){ $('#stats').innerHTML=`<span>Ejercicio <b>${Math.min(drill.idx+1,drill.queue.length)} de ${drill.queue.length}</b></span><span>Correctos <b>${drill.ok}</b></span>`; return; }
+  renderSurv();
   if(mode!=='tutor'){ $('#stats').innerHTML=modeStats(); if(mode==='duelo') renderDuel(); return; }
   const st=[`<span>Tandas <b>${sets}</b></span>`, `<span>Líneas <b>${lines}</b></span>`];
   if(mode==='eterno') st.push(`<span>Rescates <b>${rescues}</b></span>`);
@@ -673,6 +698,7 @@ function renderTray(){
     if(!used[i]){
       let badge='';
       if(rescued.has(i)){ slot.classList.add('rescued'); badge=mode==='tutor'?'cambiada':mode==='duelo'?'vida perdida':'rescate'; }
+      else if(mode==='survival' && servedIdx.has(i)){ slot.classList.add('first'); badge='servida'; }
       else if(i===firstSlot){ slot.classList.add('first'); badge='mejor 1ª'; }
       if(badge){ const b=document.createElement('span'); b.className='badge'; b.textContent=badge; slot.appendChild(b); }
       const m=document.createElement('div'); m.className='mini';
@@ -786,6 +812,7 @@ function commit(i,r,c){
     const cb=$('#combo'); cb.textContent=(res.n>1?`¡x${res.n}! `:'')+`+${pts}`+(bonus.label?` · ${bonus.label}`:''); cb.classList.remove('show'); void cb.offsetWidth; cb.classList.add('show');
   }
   if(album && mode==='eterno') album.pts+=score-sc0;
+  if(mode==='survival') boostAfterMove(res, score-sc0);
   if(verdict) recordMove(verdict, s, i, r, c, before, res, beforeStr, wasSwapped, trayNow);
   after();
   popAnim(popped);
@@ -866,7 +893,7 @@ function loadState(){
 function syncModeUI(){
   document.querySelectorAll('[data-mode]').forEach(b=>b.setAttribute('aria-pressed', b.dataset.mode===mode));
   $('#rowTutor').hidden = mode!=='tutor'; $('#rowEterno').hidden = mode!=='eterno';
-  $('#rowDuel').hidden = mode!=='duelo'; $('#rowPuzzle').hidden = mode!=='puzzle';
+  $('#rowDuel').hidden = mode!=='duelo'; $('#rowPuzzle').hidden = mode!=='puzzle'; renderSurv();
   $('#sub').textContent = MODES[mode];
   const lbl=document.querySelectorAll('.scores .score span');
   lbl[0].textContent = mode==='puzzle' ? 'Nivel' : 'Puntos'; lbl[1].textContent = mode==='puzzle' ? 'Resueltos' : 'Récord';
@@ -1312,7 +1339,7 @@ function dueDrills(){
 }
 function drillUI(on){
   $('#rowMain').hidden=on; $('#drillBar').hidden=!on;
-  if(on){ $('#rowTutor').hidden=true; $('#rowEterno').hidden=true; } else syncModeUI();
+  if(on){ ['#rowTutor','#rowEterno','#rowSurv','#rowDuel','#rowPuzzle'].forEach(q=>$(q).hidden=true); } else syncModeUI();
 }
 $('#drillGo').addEventListener('click',()=>{
   if(drill) return;
@@ -1717,7 +1744,7 @@ function extraPoints(res, hits){
 function modeStats(){
   const st=[];
   if(mode==='eterno') st.push(`<span>Tandas <b>${sets}</b></span>`,`<span>Líneas <b>${lines}</b></span>`,`<span>Rescates <b>${rescues}</b></span>`);
-  if(mode==='survival') st.push(`<span>Vidas <b class="lives">${'♥'.repeat(Math.max(0,lives))}${'♡'.repeat(Math.max(0,3-lives))}</b></span>`,`<span>Líneas <b>${lines}</b></span>`);
+  if(mode==='survival') st.push(`<span>Líneas <b>${lines}</b></span>`,`<span>Invertido <b>${X.spent||0}</b></span>`);
   if(mode==='duelo') st.push(`<span>Tanda <b>${Math.min(X.setIdx,X.N)} de ${X.N}</b></span>`,`<span>Tus vidas perdidas <b>${X.lost}</b></span>`,`<span>Descontado <b>${X.pen?'−'+X.pen:0}</b></span>`);
   if(mode==='puzzle') st.push(`<span>Intentos <b>${X.tries}</b></span>`,`<span>Pistas <b>${X.hints}</b></span>`);
   if(BONUS_MODES.includes(mode)) st.push(`<span>Racha <b>${streak}</b></span>`,`<span>Mejor racha <b>${bestStreak}</b></span>`,`<span>Líneas de color <b>${colorLines}</b></span>`);
@@ -1726,7 +1753,7 @@ function modeStats(){
 // Arranque de cada modo. Devuelve true si el modo ya armó tablero y bandeja.
 function modeStart(seed){
   streak=0; bestStreak=0; colorLines=0; X={};
-  if(mode==='survival'){ lives=3; X.lifePts=[]; X.mark=0; }
+  if(mode==='survival'){ lives=3; X.lifePts=[]; X.mark=0; X.queue=[]; X.bought={}; X.spent=0; X.used=0; X.fut=0; X.served=0; X.mult=null; X.hammer=false; }
   if(mode==='duelo') duelInit(seed);
   if(mode==='puzzle'){ puzzleLoad(); return true; }
   return false;
@@ -1772,6 +1799,7 @@ function survivalOver(){
       <div class="kpi"><b>${bestStreak}</b><span>Mejor racha</span></div>
       <div class="kpi"><b>${colorLines}</b><span>Líneas de color</span></div>
       <div class="kpi"><b>${sets}</b><span>Tandas</span></div>
+      <div class="kpi wide"><b>${X.spent||0} pts</b><span>Invertidos en ${X.used||0} ${X.used===1?'booster':'boosters'}</span></div>
     </div>
     <div class="tools"><button type="button" id="again" class="primary">Jugar de nuevo</button></div>`,
     ()=>$('#again').addEventListener('click',()=>{ closeBalance(); startGame('survival'); }));
@@ -1980,6 +2008,109 @@ function endAlbum(){
       <div class="kpi"><b>${a.placed?(a.lines/a.placed*10).toFixed(1):'0'}</b><span>Líneas cada 10 piezas</span></div>
     </div>`);
 }
+
+// ---------- Survival: vidas arriba y boosters que se compran con tus puntos ----------
+// El precio sube ×1,5 cada vez que comprás el mismo booster en la partida (si no, el martillo te deja sin riesgo).
+const BOOST={
+  future:{t:'Ver el futuro',      base:60,  d:'Ves la próxima tanda durante 3 tandas.'},
+  hammer:{t:'Martillo de colores', base:120, d:'Tocá un bloque: se borran todos los de ese color. 1 punto por bloque.'},
+  mult:  {t:'Multiplicador',       base:150, d:'x2 durante 5 jugadas. Cada jugada que rompe 2 o más líneas lo sube: x4, x6, x8.'},
+  served:{t:'Piezas servidas',     base:250, d:'El motor te sirve piezas para hacer combos: lo que queda de esta tanda y la siguiente.'},
+};
+let servedIdx=new Set();
+const price=k=>Math.round(BOOST[k].base*Math.pow(1.5,(X.bought&&X.bought[k])||0));
+const randIds=()=>[pickWeighted(),pickWeighted(),pickWeighted()].map(s=>s.id);
+// Reparto del Survival: hay una cola de tandas (para poder mostrar la próxima con "Ver el futuro")
+function survivalSet(){
+  if(X.served>0){ X.served--; const s=servedPieces(3); servedIdx=new Set([0,1,2]); return s; }
+  servedIdx=new Set();
+  X.queue=X.queue||[]; while(X.queue.length<2) X.queue.push(randIds());
+  if(X.fut>0) X.fut--;
+  return X.queue.shift().map(id=>BY_ID[id]);
+}
+// Piezas servidas: el motor busca, una por una, la pieza que en el tablero actual rompe más líneas
+function servedPieces(k){
+  let o=occ(board); const out=[];
+  for(let n=0;n<k;n++){
+    let best=null;
+    for(const s of ACTIVE){ if(s.id==='dot') continue;
+      for(let r=0;r<=N-s.h;r++) for(let c=0;c<=N-s.w;c++){ if(!fits(o,s,r,c)) continue;
+        const p=placeO(o,s,r,c), q=p.n*100+health(p.o);
+        if(!best || q>best.q) best={s,o:p.o,q}; } }
+    if(best){ out.push(best.s); o=best.o; } else out.push(DOT);
+  }
+  return out;
+}
+function buyBoost(k){
+  if(mode!=='survival' || X.over) return;
+  const p=price(k);
+  if(score<p){ log(`Te faltan ${p-score} puntos para ${BOOST[k].t}.`); return; }
+  if(k==='mult' && X.mult){ log('Ya tenés el multiplicador activo.'); return; }
+  if(k==='served' && X.served>0){ log('Ya tenés piezas servidas en camino.'); return; }
+  if(k==='hammer' && X.hammer){ X.hammer=false; flash=null; render(); log('Martillo guardado.'); return; }
+  score-=p; X.bought=X.bought||{}; X.bought[k]=(X.bought[k]||0)+1; X.spent=(X.spent||0)+p; X.used=(X.used||0)+1;
+  if(k==='future'){ X.fut=(X.fut||0)+3; log('Ver el futuro: abajo de la bandeja ves la próxima tanda.'); }
+  if(k==='mult'){ X.mult={x:2,left:5}; log('Multiplicador x2 por 5 jugadas. Rompé 2 o más líneas juntas para subirlo.'); }
+  if(k==='hammer'){ X.hammer=true; log('Martillo listo: tocá un bloque del tablero y se borra todo ese color.'); }
+  if(k==='served'){
+    const idx=[0,1,2].filter(i=>!used[i]), s=servedPieces(idx.length);
+    idx.forEach((i,j)=>tray[i]=s[j]); servedIdx=new Set(idx); X.served=1;
+    log('Piezas servidas: esta bandeja y la próxima vienen armadas para romper líneas.');
+  }
+  renderTray(); render(); saveState();
+}
+// Multiplicador: se aplica a todo lo que sumó la jugada
+function boostAfterMove(res, gained){
+  const m=X.mult; if(!m) return;
+  if(res.n>=2) m.x=Math.min(8,m.x+2);
+  const extra=gained*(m.x-1); score+=extra;
+  if(extra){ const cb=$('#combo'); cb.textContent=`x${m.x} · +${gained+extra}`; cb.classList.remove('show'); void cb.offsetWidth; cb.classList.add('show'); }
+  if(--m.left<=0){ X.mult=null; log(`Se terminó el multiplicador (llegó a x${m.x}).`); }
+}
+// Martillo: se elige el color tocando un bloque
+function cellAt(e){
+  const br=boardEl.getBoundingClientRect(), cs=cellSize();
+  const c=Math.floor((e.clientX-br.left-6)/(cs+3)), r=Math.floor((e.clientY-br.top-6)/(cs+3));
+  return r>=0&&r<N&&c>=0&&c<N ? r*N+c : -1;
+}
+const sameHue=g=>new Set(board.map((v,i)=>v!=null&&HUE[v]===g?i:-1).filter(i=>i>=0));
+boardEl.addEventListener('pointermove',e=>{ if(mode!=='survival'||!X.hammer||drag) return; const i=cellAt(e); flash = i>=0&&board[i]!=null ? sameHue(HUE[board[i]]) : null; render(); });
+boardEl.addEventListener('pointerdown',e=>{
+  if(mode!=='survival' || !X.hammer || drag || drill) return;
+  const i=cellAt(e); if(i<0 || board[i]==null) return;
+  e.preventDefault(); hammerAt(i);
+});
+function hammerAt(i){
+  const cells=[...sameHue(HUE[board[i]])], popped=cells.map(k=>[k,SHAPES[board[k]].col]);
+  cells.forEach(k=>board[k]=null); score+=cells.length; X.hammer=false; flash=null;
+  const cb=$('#combo'); cb.textContent=`¡Martillazo! +${cells.length}`; cb.classList.remove('show'); void cb.offsetWidth; cb.classList.add('show');
+  popAnim(popped); log(`Borraste ${cells.length} bloques de ese color.`);
+  if(score>best){ best=score; store.set(bestKey(mode),best); }
+  renderTray(); render(); saveState();
+}
+function renderSurv(){
+  const on=mode==='survival';
+  $('#livesTop').hidden=!on; $('#rowSurv').hidden=!on || !!drill;
+  if(!on){ $('#nextBox').hidden=true; return; }
+  $('#livesTop').innerHTML=[0,1,2].map(k=>`<span class="heart${k<lives?'':' off'}" aria-hidden="true">♥</span>`).join('')+`<span class="sr">${lives} vidas</span>`;
+  document.querySelectorAll('#rowSurv [data-b]').forEach(b=>{
+    const k=b.dataset.b, p=price(k), active=(k==='mult'&&X.mult)||(k==='served'&&X.served>0)||(k==='hammer'&&X.hammer);
+    b.querySelector('small').textContent = k==='hammer'&&X.hammer ? 'tocá un bloque' : active ? 'activo' : `${p} pts`;
+    b.disabled = X.over || (!(k==='hammer'&&X.hammer) && (score<p || active));
+    b.classList.toggle('on', !!active);
+  });
+  const st=[]; if(X.mult) st.push(`Multiplicador x${X.mult.x} · ${X.mult.left} ${X.mult.left===1?'jugada':'jugadas'}`);
+  if(X.fut>0) st.push(`Futuro: ${X.fut} ${X.fut===1?'tanda':'tandas'}`); if(X.served>0) st.push('Próxima tanda servida');
+  $('#boostInfo').textContent=st.join(' · ');
+  const nb=$('#nextBox'); nb.hidden=!(X.fut>0);
+  if(X.fut>0){
+    if(X.served>0) nb.innerHTML='<span class="fl">Próxima tanda</span><span class="foot">La sirve el motor</span>';
+    else { X.queue=X.queue||[]; while(X.queue.length<1) X.queue.push(randIds());
+      nb.innerHTML='<span class="fl">Próxima tanda</span>'+X.queue[0].map(id=>{ const s=BY_ID[id];
+        return `<div class="mini" style="grid-template-columns:repeat(${s.w},10px);grid-template-rows:repeat(${s.h},10px)">${s.cells.map(([r,c])=>`<i class="blk" style="--col:${s.col};grid-row:${r+1};grid-column:${c+1}"></i>`).join('')}</div>`; }).join(''); }
+  }
+}
+document.querySelectorAll('#rowSurv [data-b]').forEach(b=>b.addEventListener('click',()=>buyBoost(b.dataset.b)));
 
 buildBoard();
 if(loadState()){ syncModeUI(); runAnalysis(); renderTray(); render(); log(mode==='tutor'?`Seguís tu partida del tutor (${game.moves.length} jugadas).`:'Seguís tu partida.'); }

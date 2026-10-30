@@ -31,7 +31,8 @@ Lee el historial a medida que guardás partidas del Tutor y entrena tus falencia
 
 ## Más modos
 - **Duelo**: 20 tandas con semilla; el motor juega exactamente las mismas en un tablero chico al lado, una jugada por cada jugada tuya. Misma regla para los dos al trabarse: se pierde una vida, esas piezas pasan a ser Puntos y se descuenta lo que el motor sumaba con esa bandeja desde el tablero inicial menos lo que se había sumado (sin descuento si el motor también se trababa). Gana el que suma más. **Desafío del día**: la misma secuencia todo el día, con intentos y mejor marca; **Duelo libre**: piezas nuevas; revancha con las mismas piezas.
-- **Survival**: tandas reales y 3 vidas; cada vez que te trabás perdés una. Resumen con puntos de cada vida y récord.
+- **Survival**: tandas reales y 3 vidas (corazones arriba del tablero, se apagan al perder); cada vez que te trabás perdés una. Resumen con puntos de cada vida, puntos invertidos y récord.
+  - **Boosters** que se pagan con tus puntos (el precio sube ×1,5 cada vez que repetís uno en la partida): Ver el futuro (60, próxima tanda durante 3 tandas), Martillo de colores (120, borra todos los bloques de un tono, 1 punto por bloque), Multiplicador (150, x2 por 5 jugadas; romper 2+ líneas lo sube a x4, x6, x8) y Piezas servidas (250, el motor arma lo que queda de la tanda y la siguiente para romper líneas).
 - **Puzzles**: un tablero y 3 piezas para dejarlo vacío. Se generan al revés (líneas a limpiar + piezas que caen en ellas) y se verifica que tengan solución. De 2 a 5 líneas según el nivel; reintentar, pista y otro puzzle.
 - **Racha y línea de color** (Eterno y Survival): bonus por romper líneas en jugadas seguidas y por romper una línea de un solo tono.
 - **Sesión álbum** (Eterno): elegís 30, 45 o 60 minutos y al final te muestra el resumen de la sesión.
