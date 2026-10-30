@@ -407,6 +407,21 @@ const LW = 8;      // valor de cada línea limpiada
 const DEAD = 40;   // castigo por cada pieza de la tanda que queda sin lugar
 const BEAM = 5;    // cuántas continuaciones explora en profundidad
 
+// Igual que bestSeq, pero además devuelve cuántas líneas rompe ese mejor plan y si alguna pieza queda sin lugar
+function bestSeqL(o, pieces){
+  if(!pieces.length) return {val:health(o), lines:0, dead:0};
+  const cands=[], seen=new Set();
+  pieces.forEach((s,i)=>{ if(seen.has(s.id)) return; seen.add(s.id);
+    const rest=pieces.filter((_,j)=>j!==i);
+    for(let r=0;r<=N-s.h;r++) for(let c=0;c<=N-s.w;c++){ if(!fits(o,s,r,c)) continue;
+      const p=placeO(o,s,r,c); cands.push({o:p.o, n:p.n, rest, q:p.n*LW+health(p.o)}); } });
+  if(!cands.length) return {val:health(o)-DEAD*pieces.length, lines:0, dead:pieces.length};
+  cands.sort((a,b)=>b.q-a.q);
+  let best=null;
+  for(const x of cands.slice(0,BEAM)){ const sub=bestSeqL(x.o, x.rest), v=x.n*LW+sub.val;
+    if(!best || v>best.val) best={val:v, lines:x.n+sub.lines, dead:sub.dead}; }
+  return best;
+}
 // Mejor resultado alcanzable colocando el resto de la tanda (cualquier orden).
 // Solo usa lo que el jugador podía ver: tablero + piezas de la tanda. Nada del futuro.
 function bestSeq(o, pieces){
@@ -464,27 +479,35 @@ function judge(A, i, r, c){
 }
 // Causa probable de un error: compara tu tablero resultante con el de la jugada sugerida
 const CAUSE = {
+  block: {t:'Te trabaste la bandeja',  short:'dejaste piezas de la bandeja sin lugar', tip:'Antes de soltar, chequeá que las otras piezas de la bandeja sigan teniendo lugar: es el error que en el juego real te hace perder.'},
   hole:  {t:'Huecos aislados',        short:'dejaste un hueco',               tip:'Antes de soltar, mirá las celdas vecinas: si una queda encerrada, solo entra el Punto, que casi nunca sale.'},
   no3:   {t:'Sin lugar para el 3×3',  short:'te quedaste sin lugar para el 3×3', tip:'Mantené siempre libre un espacio de 3×3: lo necesitan el cuadrado grande y las esquinas grandes.'},
   frag:  {t:'Espacio fragmentado',    short:'achicaste el espacio útil',       tip:'Juntá los bloques en un sector y dejá el espacio libre en una sola zona grande: ahí entra casi cualquier pieza.'},
   greedy:{t:'Romper líneas a cualquier costo', short:'romper esas líneas te dejó peor', tip:'Una línea no siempre conviene: si el combo deja el tablero roto, elegí la jugada que lo deje parejo.'},
   order: {t:'Orden de las piezas',    short:'convenía empezar por otra pieza', tip:'Mirá las tres piezas antes de mover y empezá por la más difícil de ubicar.'},
   rough: {t:'Bordes irregulares',     short:'dejaste escalones y salientes',   tip:'Apoyá las piezas contra bloques o bordes: los escalones y salientes dejan lugares donde casi nada encaja.'},
-  miss:  {t:'Líneas que dejaste pasar', short:'dejaste pasar una línea',       tip:'Si una jugada rompe una línea sin romper el tablero, tomala: liberar espacio es lo que te mantiene vivo.'},
+  miss:  {t:'Líneas que dejaste pasar', short:'con la bandeja completa rompías más líneas', tip:'Antes de soltar, mirá si con las otras piezas podés cerrar una línea: a veces la primera pieza tiene que prepararla.'},
 };
 // Irregularidad: cambios lleno/vacío entre celdas vecinas (más = más escalones)
 function rough(o){ let t=0; for(let r=0;r<N;r++) for(let c=0;c<N;c++){ const i=r*N+c; if(c<N-1 && o[i]!==o[i+1]) t++; if(r<N-1 && o[i]!==o[i+N]) t++; } return t; }
-function causes(before, s, r, c, bs, bpos, orderErr){
+// restU / restB: las otras piezas de la bandeja después de tu jugada / después de la sugerida.
+// Varias reglas miran la bandeja completa, porque el motor juzga así: colocando también el resto.
+function causes(before, s, r, c, bs, bpos, orderErr, restU, restB){
   const t=[];
-  if(orderErr) t.push('order');
-  if(!bs || !bpos) return t;
+  if(!bs || !bpos){ if(orderErr) t.push('order'); return t; }
   const u=placeO(before,s,r,c), b=placeO(before,bs,bpos[0],bpos[1]);
+  const pu=restU ? bestSeqL(u.o,restU) : null, pb=restB ? bestSeqL(b.o,restB) : null;
+  if(pu && pb && pu.dead>0 && pb.dead===0) t.push('block');   // primero: es el error que hace perder
+  if(orderErr) t.push('order');
   if(holes(u.o)>holes(b.o)) t.push('hole');
   if(!anyFit(u.o,O3) && anyFit(b.o,O3)) t.push('no3');
   if(pFit(u.o) < pFit(b.o)-0.1) t.push('frag');
   if(u.n>b.n) t.push('greedy');
-  if(u.n<b.n) t.push('miss');
+
   if(rough(u.o)>=rough(b.o)+4) t.push('rough');
+  // Líneas con la bandeja completa (tu jugada + mejor continuación vs plan del motor). Va como causa residual:
+  // casi todo error termina en menos líneas, así que solo se nombra cuando no hay un problema de forma del tablero.
+  if(!t.length && (pu && pb ? u.n+pu.lines < b.n+pb.lines : u.n<b.n)) t.push('miss');
   return t;
 }
 // ENGINE END
@@ -740,7 +763,8 @@ function recordMove(v, s, i, r, c, before, res, beforeStr, swapped, trayNow){
   const after=res.o, nAfter=after.reduce((a,x)=>a+x,0);
   const bst=analysis.best;
   // Causa probable del error, comparando tu tablero resultante con el de la jugada sugerida
-  const tags = v.cat==='optima' ? [] : causes(before, s, r, c, tray[bst.slot], bst.pos, v.orderErr);
+  const restOf=(ids,id)=>{ const k=ids.indexOf(id); return ids.filter((_,j)=>j!==k).map(x=>BY_ID[x]||DOT); };
+  const tags = v.cat==='optima' ? [] : causes(before, s, r, c, tray[bst.slot], bst.pos, v.orderErr, restOf(trayNow,s.id), restOf(trayNow,tray[bst.slot].id));
   // Foto del tablero antes de la jugada + sugerencia del motor + puntos que sumó, para el registro jugada a jugada
   const mv={b:beforeStr, pos:[r,c], bp:tray[bst.slot].id, bpos:bst.pos, pts:s.cells.length+res.n*10*res.n, ln:res.n, p:s.id, loss:+v.loss.toFixed(2), cat:v.cat, ord:v.orderErr?1:0, acc:+v.acc.toFixed(1),
     holes:Math.max(0, holes(after)-holes(before)), no3:anyFit(after,O3)?0:1, fill:nAfter, sw:swapped?1:0, h:live()?1:0, t:trayNow, tg:tags, cw:warnOn()?1:0};
@@ -1196,7 +1220,9 @@ function coachNote(s){
 function warnCtx(i,s){
   if(!warnOn() || !analysis || !analysis.per[i] || !analysis.per[i].bestPos) return null;
   const o=occ(board), e=analysis.per[i], bRes=placeO(o,s,...e.bestPos), bAfter=bRes.o;
-  const ctx={f:coach.focus, e, bAfter, bHoles:holes(bAfter), b3:anyFit(bAfter,O3), bP:pFit(bAfter), bR:rough(bAfter), bN:bRes.n, orderMsg:null};
+  const rest=[0,1,2].filter(j=>!used[j] && j!==i).map(j=>tray[j]);
+  const ctx={f:coach.focus, e, bAfter, bHoles:holes(bAfter), b3:anyFit(bAfter,O3), bP:pFit(bAfter), bR:rough(bAfter), bN:bRes.n, rest, cache:new Map(), orderMsg:null};
+  if(ctx.f==='miss') ctx.bTot=bRes.n+bestSeqL(bAfter,rest).lines;
   if(ctx.f==='order' && analysis.nSlots>1 && analysis.best.val-e.bestVal>CUT.buena) ctx.orderMsg='Ojo con el orden: convendría empezar por otra pieza';
   return ctx;
 }
@@ -1209,7 +1235,10 @@ function warnFor(ctx,o,s,r,c){
     case 'no3':    return !anyFit(u.o,O3) && ctx.b3 ? 'Ojo: te quedás sin lugar para el 3×3' : null;
     case 'frag':   return pFit(u.o)<ctx.bP-0.1 ? 'Ojo: achicás el espacio útil' : null;
     case 'rough':  return rough(u.o)>=ctx.bR+4 ? 'Ojo: dejás escalones y salientes' : null;
-    case 'miss':   return u.n<ctx.bN ? 'Ojo: esta pieza puede romper una línea en otro lugar' : null;
+    case 'block':  { const k=r*N+c; if(!ctx.cache.has(k)) ctx.cache.set(k, bestSeqL(u.o,ctx.rest).dead>0);
+                     return ctx.cache.get(k) ? 'Ojo: con esta jugada no te entran las otras piezas' : null; }
+    case 'miss':   { const k=r*N+c; if(!ctx.cache.has(k)) ctx.cache.set(k, u.n+bestSeqL(u.o,ctx.rest).lines);
+                     return ctx.cache.get(k)<ctx.bTot && (ctx.e.table.get(k)??-Infinity) < ctx.e.bestVal-CUT.buena ? 'Ojo: con la bandeja completa podés romper más líneas' : null; }
     case 'greedy': return u.n>0 && (ctx.e.table.get(r*N+c)??-Infinity) < ctx.e.bestVal-CUT.buena ? 'Ojo: romper líneas acá te deja peor' : null;
   }
   return null;
@@ -1279,7 +1308,8 @@ function drillAttempt(i,r,c){
     drills[d.id]={box:prev.box, due:now+DAY};
     txt=`<b style="--k:var(--c-good)">Casi.</b> Es buena, pero la mejor es <em>${bs.name}</em> en el lugar marcado en verde. Vuelve mañana.`;
   } else {
-    const tg=causes(occ(board), s, r, c, bs, b.pos, v.orderErr);
+    const ids=[0,1,2].filter(j=>!used[j]).map(j=>tray[j].id), restOf=id=>{ const k=ids.indexOf(id); return ids.filter((_,j)=>j!==k).map(x=>BY_ID[x]); };
+    const tg=causes(occ(board), s, r, c, bs, b.pos, v.orderErr, restOf(s.id), restOf(bs.id));
     drills[d.id]={box:0, due:now+10*60e3};
     txt=`<b style="--k:var(--c-err)">No.</b> La mejor es <em>${bs.name}</em> en el lugar marcado en verde.${tg.length?` Con tu jugada ${tg.map(t=>CAUSE[t].short).join(', ')}.`:''} Vuelve en 10 minutos.`;
   }
@@ -1394,7 +1424,9 @@ El motor compara cada jugada con la mejor posible usando solo lo que el jugador 
 - Sin lugar para el 3×3: el jugador se quedó sin lugar para el 3×3 y la sugerida no.
 - Espacio fragmentado: la probabilidad de que la próxima pieza al azar entre baja más de 0,10.
 - Bordes irregulares: 4 o más cambios lleno/vacío entre vecinos que la sugerida.
-- Líneas que dejaste pasar / Romper líneas a cualquier costo: rompió menos / más líneas que la sugerida.
+- Te trabaste la bandeja: después de la jugada, alguna otra pieza de la bandeja se queda sin lugar (y con la sugerida no).
+- Líneas que dejaste pasar (solo si no aplica ninguna otra): con la bandeja completa (jugada + mejor continuación) rompe menos líneas que el plan del motor.
+- Romper líneas a cualquier costo: la primera pieza rompió más líneas que la sugerida, pero la jugada igual era peor.
 - Orden de las piezas: el problema fue qué pieza jugó primero.
 
 Importante: el motor no juzga la jugada aislada. Calcula el mejor final posible colocando también el resto de la bandeja; por eso cada caso trae "resto_de_la_bandeja" con la mejor continuación tras la jugada del jugador y la del motor tras la sugerida, con sus tableros y métricas finales. Muchas diferencias solo se ven ahí.
