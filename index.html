@@ -858,7 +858,7 @@ function summarize(g, pts, lns, sts){
   // Vidas: tramos de puntos entre rescates; el último tramo sigue "en curso" (terminaste vos, no el juego)
   const lives=[...(g.lives||[]), pts-(g.mark||0)], ppl=Math.round(pts/lives.length);
   const cz={}; m.forEach(x=>(x.tg||[]).forEach(t=>cz[t]=(cz[t]||0)+1));
-  return {id:g.start, cv:3, date:new Date().toISOString(), start:g.start, n, hint, aid, cz, lives, ppl, points:pts, lines:lns, sets:sts, saves:g.saves,
+  return {id:g.start, cv:4, date:new Date().toISOString(), start:g.start, n, hint, aid, cz, lives, ppl, points:pts, lines:lns, sets:sts, saves:g.saves,
     global:+global.toFixed(1), dec:+dec.toFixed(1), ord:+ord.toFixed(1), sup:+sup.toFixed(1), sal:+sal.toFixed(1),
     dec1:+dec1.toFixed(1), dec2:+dec2.toFixed(1), cats, ordErr, holes:holesC, no3, worstPiece, pieces:pc, worst:g.worst,
     log:m.map(x=>({b:x.b,pos:x.pos,bp:x.bp,bpos:x.bpos,p:x.p,cat:x.cat,loss:x.loss,ord:x.ord,pts:x.pts,ln:x.ln,h:x.h,sw:x.sw,t:x.t,tg:x.tg,cw:x.cw}))};
@@ -1491,6 +1491,37 @@ $('#uncDel').addEventListener('click',()=>{
   $('#cMsg').textContent='Registro de errores sin causa clara vaciado.';
 });
 hist.forEach(logUnclear);   // completa el registro con las partidas que ya tenías
+
+// ---------- Migración: recalcula las causas de partidas guardadas con reglas viejas ----------
+// El registro guarda tablero, bandeja, jugada y sugerida, así que las causas se pueden recalcular sin jugar de nuevo.
+// Va de a una partida por vez para no congelar la página.
+const CAUSE_VER = 4;
+function retag(g){
+  g.log.forEach(x=>{
+    if(x.sw || !x.t || x.loss<=CUT.optima) return;
+    const before=occ(decodeBoard(x.b)), s=BY_ID[x.p], bs=BY_ID[x.bp]; if(!s || !bs) return;
+    const restOf=id=>{ const k=x.t.indexOf(id); return x.t.filter((_,j)=>j!==k).map(i=>BY_ID[i]||DOT); };
+    x.tg=causes(before, s, x.pos[0], x.pos[1], bs, x.bpos, !!x.ord, restOf(x.p), restOf(x.bp));
+  });
+  g.cz={}; g.log.forEach(x=>(x.tg||[]).forEach(t=>g.cz[t]=(g.cz[t]||0)+1));
+  g.cv=CAUSE_VER;
+}
+(function migrate(){
+  const todo=hist.filter(g=>g.cv===3 && Array.isArray(g.log));
+  if(!todo.length) return;
+  $('#cMsg').textContent=`Actualizando las causas de ${todo.length} ${todo.length===1?'partida':'partidas'} con las reglas nuevas…`;
+  let k=0;
+  (function step(){
+    if(k<todo.length){ retag(todo[k++]); setTimeout(step, 0); return; }
+    // Los casos que ahora sí tienen causa salen del registro de "sin causa clara"
+    const still=new Set(); hist.forEach(g=>(g.log||[]).forEach((x,i)=>{ if(!(x.tg&&x.tg.length)) still.add(g.id+'#'+i); }));
+    unclear=unclear.filter(u=>!hist.some(g=>u.id.startsWith(g.id+'#')) || still.has(u.id));
+    store.set(LS.unclear, JSON.stringify(unclear));
+    coach.focus=null; coach.grad=null; saveCoach();     // el ranking cambió: el foco se elige de nuevo
+    saveHist();
+    $('#cMsg').textContent=`Listo: recalculé las causas de ${todo.length} ${todo.length===1?'partida':'partidas'} y elegí tu foco de nuevo.`;
+  })();
+})();
 
 buildBoard();
 if(loadState()){ syncModeUI(); runAnalysis(); renderTray(); render(); log(mode==='tutor'?`Seguís tu partida del tutor (${game.moves.length} jugadas).`:'Seguís tu partida.'); }
