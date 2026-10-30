@@ -479,7 +479,7 @@ function judge(A, i, r, c){
 }
 // Causa probable de un error: compara tu tablero resultante con el de la jugada sugerida
 const CAUSE = {
-  block: {t:'Te trabaste la bandeja',  short:'dejaste piezas de la bandeja sin lugar', tip:'Antes de soltar, chequeá que las otras piezas de la bandeja sigan teniendo lugar: es el error que en el juego real te hace perder.'},
+  block: {t:'Te trabaste la bandeja',  short:'dejaste piezas de la bandeja sin lugar', tip:'Antes de soltar la primera pieza, mirá cuántos lugares tiene cada una de las tres y arrancá por la que menos tiene. Si una jugada rompe una línea, suele abrirles lugar a las otras.'},
   hole:  {t:'Huecos aislados',        short:'dejaste un hueco',               tip:'Antes de soltar, mirá las celdas vecinas: si una queda encerrada, solo entra el Punto, que casi nunca sale.'},
   no3:   {t:'Sin lugar para el 3×3',  short:'te quedaste sin lugar para el 3×3', tip:'Mantené siempre libre un espacio de 3×3: lo necesitan el cuadrado grande y las esquinas grandes.'},
   frag:  {t:'Espacio fragmentado',    short:'achicaste el espacio útil',       tip:'Juntá los bloques en un sector y dejá el espacio libre en una sola zona grande: ahí entra casi cualquier pieza.'},
@@ -1197,11 +1197,14 @@ function renderCoach(){
   }
   const bars=st.rank.map(r=>`<div class="sub${r.k===f?' on':''}"><span>${CAUSE[r.k].t}<br><small>${r.cnt} ${r.cnt===1?'jugada':'jugadas'}</small></span><div class="bar"><i style="width:${Math.max(2,100*r.v/max)}%"></i></div><b>${r.v.toFixed(1)}</b></div>`).join('');
   const otro=st.R.otro ? `<p class="done">${st.R.otro} ${st.R.otro===1?'error':'errores'} sin causa clara: el motor ve una jugada mejor, pero la diferencia no encaja en ninguna de estas categorías.</p>` : '';
+  const P=findPatterns(st.E);
   const done=coach.done.length ? `<p class="done">Focos superados: ${coach.done.map(d=>`${CAUSE[d.k].t} (${d.base} → ${d.end})`).join(' · ')}</p>` : '';
   body.innerHTML=`${gradHtml}
     <div class="focus"><span class="fl">Tu foco ahora</span><span class="ft">${CAUSE[f].t}</span>
       <span class="note">Base: te cuesta ${coach.base.toFixed(1)} puntos de evaluación cada 100 jugadas. ${progTxt}</span>
+      ${focusContext(f,P)}
       <p class="tip">${CAUSE[f].tip}</p></div>
+    ${patternsBlock(P)}
     <div class="rank"><h3>Tus falencias · costo cada 100 jugadas</h3>${bars}</div>${otro}${done}`;
 }
 $('#cNext').addEventListener('click',()=>{
@@ -1340,7 +1343,7 @@ Cómo leer los datos
 - Los tableros van como 8 filas de arriba hacia abajo; "#" es ocupado y "." vacío. Las posiciones son fila y columna desde 0 (arriba a la izquierda) de la esquina superior izquierda del rectángulo que ocupa la pieza. Las formas de las piezas van fila por fila separadas por "/".
 
 Qué hacer
-1. Diagnóstico: las 2 o 3 falencias principales, con evidencia concreta de los datos (cifras, partidas, jugadas). Distinguí patrones consistentes de casos aislados.
+1. Diagnóstico: las 2 o 3 falencias principales, con evidencia concreta de los datos (cifras, partidas, jugadas). Distinguí patrones consistentes de casos aislados. Una causa como "Te trabaste la bandeja" es un resultado, no una explicación: usá "patrones_de_decision" (llenado del tablero, orden, qué pieza de la tanda, con qué pieza arranca, piezas, zona) para explicar cuándo y por qué pasa, y qué tendría que mirar distinto.
 2. Tendencia: si mejora, empeora o está estable, considerando el tamaño de la muestra.
 3. Análisis de jugadas: elegí 3 de las peores jugadas y explicá en cada una qué principio de juego se rompió y cómo reconocer esa situación la próxima vez. Apoyate en los números del motor; si al mirar el tablero la sugerencia no te cierra, decilo en vez de inventar una justificación.
 4. Plan: una semana de entrenamiento concreta con lo que ofrece el juego (foco del coach, ejercicios con sus propios errores, avisos durante la partida, pistas en vivo, y partidas sin ayuda para medir).
@@ -1379,6 +1382,8 @@ function buildReport(){
         ranking:st.rank.map(r=>({falencia:CAUSE[r.k].t, costo_cada_100:r1(r.v), jugadas:r.cnt})), errores_sin_causa_clara:st.R.otro,
         focos_superados:coach.done.map(d=>({falencia:CAUSE[d.k].t, desde:d.from, hasta:d.to, base:d.base, final:d.end}))}
       : {listo:false, partidas_medibles:st.E.length, jugadas_medibles:st.moves, minimo:COACH_MIN},
+    patrones_de_decision: (()=>{ const P=findPatterns(st.E); return {jugadas:P.M.length, error_general_pct:P.all.err,
+      hallazgos:P.out.map(o=>({texto:o.t.replace(/<[^>]+>/g,''), casos:o.n})), cortes:P.cuts}; })(),
     partidas, peores_jugadas:peores
   };
   return `# Bloque Eterno · reporte para el coach\n\nPegá este archivo completo en una conversación con Claude. Tiene dos partes: las instrucciones para Claude y tus datos.\n\n## Instrucciones para Claude\n\n${PROMPT}\n\n## Datos\n\n\`\`\`json\n${JSON.stringify(data,null,1)}\n\`\`\`\n`;
@@ -1523,6 +1528,112 @@ function retag(g){
     $('#cMsg').textContent=`Listo: recalculé las causas de ${todo.length} ${todo.length===1?'partida':'partidas'} y elegí tu foco de nuevo.`;
   })();
 })();
+
+// ---------- Patrones de decisión: cuándo, con qué tablero y con qué elección aparecen tus errores ----------
+// Todo sale del registro: tablero antes, bandeja, tu elección y la del motor.
+function flexOf(o,s){ let n=0; for(let r=0;r<=N-s.h;r++) for(let c=0;c<=N-s.w;c++) if(fits(o,s,r,c)) n++; return n; }
+function edgeDist(s,pos){ let d=0; s.cells.forEach(([a,b])=>{ const r=pos[0]+a, c=pos[1]+b; d+=Math.min(r,7-r,c,7-c); }); return d/s.cells.length; }
+function moveCtx(x,k){
+  const o=occ(decodeBoard(x.b)), tr=x.t.map(id=>BY_ID[id]||DOT), filled=o.reduce((a,v)=>a+v,0);
+  const flex=tr.map(s=>flexOf(o,s)), size=tr.map(s=>s.cells.length);
+  const iU=x.t.indexOf(x.p), iB=x.t.indexOf(x.bp);
+  const choice=tr.length>=2 && new Set(x.t).size===tr.length;            // había que elegir entre piezas distintas
+  const most=Math.max(...flex), least=Math.min(...flex), big=Math.max(...size), small=Math.min(...size);
+  const fx=choice && most>least, sz=choice && big>small;
+  let lineAvail=false;
+  outer: for(const s of tr) for(let r=0;r<=N-s.h;r++) for(let c=0;c<=N-s.w;c++) if(fits(o,s,r,c) && placeO(o,s,r,c).n){ lineAvail=true; break outer; }
+  const bs=BY_ID[x.bp];
+  return {k, fill:filled/64, dis: filled ? rough(o)/filled : 0, pick:4-tr.length, choice, fx, sz,
+    uMostFlex: fx && flex[iU]===most, bMostFlex: fx && flex[iB]===most, uLeastFlex: fx && flex[iU]===least, bLeastFlex: fx && flex[iB]===least,
+    uBig: sz && size[iU]===big, bBig: sz && size[iB]===big,
+    lineAvail, bLines: bs ? placeO(o,bs,...x.bpos).n : 0, uLines:x.ln||0, differs:differs(x),
+    edgeU: BY_ID[x.p] ? edgeDist(BY_ID[x.p],x.pos) : 0, edgeB: bs ? edgeDist(bs,x.bpos) : 0,
+    err: x.loss>CUT.buena, loss:x.loss, tg:x.tg||[], p:x.p};
+}
+const pct=(a,b)=>b?Math.round(100*a/b):0;
+const rateOf=L=>({n:L.length, err:pct(L.filter(m=>m.err).length,L.length)});
+const PAT_MIN=15;            // jugadas mínimas por grupo para comparar
+function findPatterns(E){
+  const M=[]; E.forEach(g=>g.log.forEach((x,k)=>{ if(!x.sw && x.t && x.b) M.push(moveCtx(x,k)); }));
+  const out=[], cuts={}, all=rateOf(M);
+  if(M.length<60) return {M, all, out, cuts};
+  const slice=defs=>defs.map(([lbl,f])=>({lbl, ...rateOf(M.filter(f))}));
+  const spread=S=>{ const ok=S.filter(s=>s.n>=PAT_MIN); if(ok.length<2) return null;
+    return {hi:ok.reduce((a,b)=>b.err>a.err?b:a), lo:ok.reduce((a,b)=>b.err<a.err?b:a)}; };
+  // 1. Qué tan lleno está el tablero
+  cuts.por_llenado=slice([['vacío (menos de 30% ocupado)',m=>m.fill<.3],['a medio llenar (30 a 55%)',m=>m.fill>=.3&&m.fill<.55],['lleno (más de 55%)',m=>m.fill>=.55]]);
+  let s=spread(cuts.por_llenado);
+  if(s && s.hi.err-s.lo.err>=8) out.push({w:s.hi.err-s.lo.err, n:Math.min(s.hi.n,s.lo.n), t:`Con el tablero <b>${s.hi.lbl}</b> te equivocás en el ${s.hi.err}% de las jugadas; con el tablero ${s.lo.lbl}, en el ${s.lo.err}%.`});
+  // 2. Ordenado o desordenado: cambios lleno/vacío por bloque ocupado (bloques sueltos y escalones = desordenado)
+  const D=M.filter(m=>m.fill>=.15);
+  if(D.length>=3*PAT_MIN){ const v=D.map(m=>m.dis).sort((a,b)=>a-b), a=v[Math.floor(v.length/3)], b=v[Math.floor(2*v.length/3)];
+    cuts.por_orden=[{lbl:'ordenado',...rateOf(D.filter(m=>m.dis<a))},{lbl:'desordenado',...rateOf(D.filter(m=>m.dis>=b))}];
+    const [o,d]=cuts.por_orden;
+    if(Math.abs(d.err-o.err)>=8) out.push({w:Math.abs(d.err-o.err), n:Math.min(o.n,d.n), t: d.err>o.err
+      ? `Con el tablero <b>desordenado</b> (bloques sueltos, escalones) te equivocás en el ${d.err}%; con el tablero ordenado, en el ${o.err}%.`
+      : `Con el tablero <b>ordenado</b> te equivocás más (${o.err}%) que con el desordenado (${d.err}%): puede que te confíes cuando está prolijo.`}); }
+  // 3. Qué pieza de la tanda estás jugando
+  cuts.por_pieza_de_la_tanda=slice([['la 1ª pieza de cada tanda',m=>m.pick===1],['la 2ª',m=>m.pick===2],['la 3ª (la que te queda)',m=>m.pick===3]]);
+  s=spread(cuts.por_pieza_de_la_tanda);
+  if(s && s.hi.err-s.lo.err>=8) out.push({w:s.hi.err-s.lo.err, n:Math.min(s.hi.n,s.lo.n), t:`Tus errores se concentran en <b>${s.hi.lbl}</b>: ${s.hi.err}% de error, contra ${s.lo.err}% en ${s.lo.lbl}.`});
+  // 4. Arranque de la partida
+  cuts.por_momento=[{lbl:'primeras 20 jugadas',...rateOf(M.filter(m=>m.k<20))},{lbl:'resto',...rateOf(M.filter(m=>m.k>=20))}];
+  const [ea,la]=cuts.por_momento;
+  if(ea.n>=PAT_MIN && la.n>=PAT_MIN && Math.abs(ea.err-la.err)>=8) out.push({w:Math.abs(ea.err-la.err), n:ea.n, t: ea.err>la.err
+    ? `Arrancás flojo: en las primeras 20 jugadas te equivocás en el ${ea.err}%, después en el ${la.err}%.`
+    : `Arrancás bien (${ea.err}% de error en las primeras 20 jugadas) y te cuesta más después (${la.err}%), cuando el tablero se complica.`});
+  // 5. Con qué pieza arrancás cada tanda: la de más lugares (fácil) o la de menos (difícil)
+  const C=M.filter(m=>m.pick===1 && m.fx);
+  if(C.length>=PAT_MIN){
+    const u=pct(C.filter(m=>m.uMostFlex).length,C.length), b=pct(C.filter(m=>m.bMostFlex).length,C.length);
+    const ul=pct(C.filter(m=>m.uLeastFlex).length,C.length), bl=pct(C.filter(m=>m.bLeastFlex).length,C.length);
+    cuts.primera_pieza_por_lugares={tandas:C.length, vos_la_mas_facil:u, motor_la_mas_facil:b, vos_la_mas_dificil:ul, motor_la_mas_dificil:bl};
+    if(u-b>=12) out.push({w:u-b, n:C.length, t:`Para arrancar cada tanda elegís <b>la pieza con más lugares</b> (la fácil) en el ${u}% de los casos; el motor, en el ${b}%. El motor arranca por la más difícil de ubicar el ${bl}% de las veces; vos, el ${ul}%. Dejar la difícil para el final es lo que traba la bandeja.`});
+    else if(ul-bl>=12) out.push({w:ul-bl, n:C.length, t:`Arrancás por la pieza más difícil de ubicar más que el motor (${ul}% contra ${bl}%): a veces conviene sacarse de encima primero la que rompe una línea.`});
+  }
+  const Z=M.filter(m=>m.pick===1 && m.sz);
+  if(Z.length>=PAT_MIN){ const u=pct(Z.filter(m=>m.uBig).length,Z.length), b=pct(Z.filter(m=>m.bBig).length,Z.length);
+    cuts.primera_pieza_por_tamano={tandas:Z.length, vos_la_mas_grande:u, motor_la_mas_grande:b};
+    if(Math.abs(u-b)>=12) out.push({w:Math.abs(u-b), n:Z.length, t: u<b
+      ? `Arrancás por la pieza más grande en el ${u}% de las tandas; el motor, en el ${b}%. Tendés a guardarte la grande para después, cuando ya no entra.`
+      : `Arrancás por la pieza más grande más que el motor (${u}% contra ${b}%).`}); }
+  // 6. Antecedentes de la bandeja trabada: en qué contexto te pasa
+  const B=M.filter(m=>m.tg.includes('block'));
+  if(B.length>=3){ const fb=pct(B.filter(m=>m.fill>=.55).length,B.length), fa=pct(M.filter(m=>m.fill>=.55).length,M.length);
+    const first=pct(B.filter(m=>m.pick===1).length,B.length), firstG=pct(M.filter(m=>m.pick===1).length,M.length);
+    const bf=B.filter(m=>m.fx), ef=pct(bf.filter(m=>m.uMostFlex).length,bf.length), gf=M.filter(m=>m.fx), efG=pct(gf.filter(m=>m.uMostFlex).length,gf.length);
+    cuts.bandeja_trabada={casos:B.length, con_tablero_lleno_pct:fb, tablero_lleno_en_general_pct:fa, con_la_primera_pieza_pct:first, eligiendo_la_pieza_con_mas_lugares_pct:bf.length?ef:null};
+    out.push({w:90, n:B.length, t:`Tus ${B.length} bandejas trabadas: el ${fb}% fue con el tablero lleno (en general, ${fa}% de tus jugadas) y el ${first}% con la primera pieza de la tanda (en general, ${firstG}%)${bf.length?`; en el ${ef}% elegiste la pieza con más lugares (en general lo hacés el ${efG}%)`:''}.`}); }
+  // 7. Líneas que había para romper
+  const L=M.filter(m=>m.bLines>0);
+  if(L.length>=PAT_MIN){ const miss=pct(L.filter(m=>m.uLines===0).length,L.length); cuts.lineas={jugadas_donde_la_mejor_rompia:L.length, vos_no_rompiste_pct:miss};
+    if(miss>=25) out.push({w:miss/2, n:L.length, t:`Cuando la mejor jugada rompía una línea, vos no rompiste ninguna en el ${miss}% de los casos.`}); }
+  // 8. Piezas
+  const byP={}; M.forEach(m=>(byP[m.p]=byP[m.p]||[]).push(m));
+  const PR=Object.entries(byP).map(([id,L])=>({id,...rateOf(L)})).filter(x=>x.n>=6).sort((a,b)=>b.err-a.err);
+  cuts.por_pieza=PR.map(x=>({pieza:nameOf(x.id), jugadas:x.n, error_pct:x.err}));
+  if(PR.length>=3 && PR[0].err-all.err>=12) out.push({w:PR[0].err-all.err, n:PR[0].n, t:`La pieza que más te cuesta es <b>${nameOf(PR[0].id)}</b>: error en el ${PR[0].err}% de las ${PR[0].n} veces que la jugaste (tu promedio es ${all.err}%). La que mejor manejás: ${nameOf(PR[PR.length-1].id)} (${PR[PR.length-1].err}%).`});
+  // 9. Dónde la ponés: hacia el centro o contra los bordes, en los errores
+  const W=M.filter(m=>m.differs && m.err);
+  if(W.length>=PAT_MIN){ const far=pct(W.filter(m=>m.edgeU>m.edgeB+0.5).length,W.length), near=pct(W.filter(m=>m.edgeU<m.edgeB-0.5).length,W.length);
+    cuts.zona_en_errores={errores:W.length, vos_mas_al_centro_pct:far, vos_mas_al_borde_pct:near};
+    if(far-near>=20) out.push({w:(far-near)/2, n:W.length, t:`En tus errores ponés la pieza más hacia el centro que el motor (${far}% de los casos, contra ${near}% más hacia el borde): el motor llena desde los bordes y deja el centro libre.`});
+    else if(near-far>=20) out.push({w:(near-far)/2, n:W.length, t:`En tus errores ponés la pieza más contra el borde que el motor (${near}% contra ${far}%).`}); }
+  out.sort((a,b)=>b.w-a.w);
+  return {M, all, out, cuts};
+}
+// Contexto del foco: en qué situación aparece esa causa, comparado con tu juego en general
+function focusContext(f, P){
+  const T=P.M.filter(m=>m.tg.includes(f)); if(T.length<3) return '';
+  const lleno=pct(T.filter(m=>m.fill>=.55).length,T.length), llenoG=pct(P.M.filter(m=>m.fill>=.55).length,P.M.length);
+  const first=pct(T.filter(m=>m.pick===1).length,T.length), firstG=pct(P.M.filter(m=>m.pick===1).length,P.M.length);
+  return `<span class="note"><b>Cuándo te pasa</b> (${T.length} casos): el ${lleno}% con el tablero lleno (en general, ${llenoG}% de tus jugadas) y el ${first}% con la primera pieza de la tanda (en general, ${firstG}%).</span>`;
+}
+function patternsBlock(P){
+  if(P.M.length<60) return `<div class="patterns"><h3>Por qué: tus patrones de decisión</h3><p class="empty">Con 60 jugadas medibles o más aparecen tus patrones: con qué tablero, con qué pieza y en qué momento de la tanda te equivocás (vas ${P.M.length}).</p></div>`;
+  const items=P.out.slice(0,6).map(o=>`<li>${o.t}${o.n<30?' <span class="tag unk">indicio</span>':''}</li>`).join('') || '<li>Por ahora no aparece ningún patrón marcado: tus errores están repartidos parejo.</li>';
+  return `<div class="patterns"><h3>Por qué: tus patrones de decisión</h3><ul>${items}</ul><p class="foot">Sobre ${P.M.length} jugadas medibles, error general ${P.all.err}%. “Indicio”: menos de 30 casos, tomalo con pinzas.</p></div>`;
+}
 
 buildBoard();
 if(loadState()){ syncModeUI(); runAnalysis(); renderTray(); render(); log(mode==='tutor'?`Seguís tu partida del tutor (${game.moves.length} jugadas).`:'Seguís tu partida.'); }
