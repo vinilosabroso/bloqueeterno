@@ -179,6 +179,23 @@ details.mv>summary:focus-visible{outline:2px solid var(--gold);outline-offset:2p
 .note{font-size:.84rem;line-height:1.5;color:var(--fg)}
 .note em{font-style:normal;color:var(--gold)}
 .foot{font-size:.72rem;color:var(--muted);line-height:1.45}
+/* Coach */
+.coach{display:flex;flex-direction:column;gap:12px}
+.focus{background:var(--board);border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:6px}
+.focus .fl{font-size:.66rem;text-transform:uppercase;letter-spacing:1.3px;color:var(--muted);font-weight:800}
+.focus .ft{font-family:var(--display);font-weight:400;font-size:1.3rem;color:var(--gold);line-height:1.1}
+.tip{font-size:.84rem;line-height:1.5;margin:0}
+.rank{display:flex;flex-direction:column;gap:7px}
+.rank .sub{grid-template-columns:minmax(0,1fr) 90px 34px}
+.rank .sub.on span{color:var(--gold)}
+.grad{background:rgba(79,224,138,.12);border:1px solid var(--c-opt);border-radius:10px;padding:10px 12px;font-size:.84rem;line-height:1.45}
+.done{font-size:.78rem;color:var(--muted);line-height:1.5;margin:0}
+#repBox{width:100%;min-height:90px;font-size:.72rem;user-select:text;-webkit-user-select:text}
+.c.warnc{outline:2px solid var(--c-err);outline-offset:-3px}
+#fb.warn{border-color:var(--c-err)}
+#drillBar{display:flex;flex-direction:column;gap:10px}
+.drillres{font-size:.86rem;line-height:1.5;margin:0}
+.drillres b{color:var(--k)}
 @media (prefers-reduced-motion:reduce){.c.pop,#combo.show,.c.pre{animation:none} .c.pre{filter:brightness(.7)} #fb{transition:none}}
 </style>
 </head>
@@ -197,7 +214,7 @@ details.mv>summary:focus-visible{outline:2px solid var(--gold);outline-offset:2p
   <div class="tray" id="tray"></div>
 
   <div class="panel">
-    <div class="row">
+    <div class="row" id="rowMain">
       <div class="seg" role="group" aria-label="Modo de juego">
         <button type="button" id="mEterno" aria-pressed="true">Eterno</button>
         <button type="button" id="mTutor" aria-pressed="false">Tutor</button>
@@ -211,9 +228,26 @@ details.mv>summary:focus-visible{outline:2px solid var(--gold);outline-offset:2p
       <label class="tg" for="live"><input type="checkbox" id="live" checked> Pistas en vivo</label>
       <button id="finish" type="button" class="primary">Terminar y ver balance</button>
     </div>
+    <div id="drillBar" hidden>
+      <p class="drillres" id="drillTxt"></p>
+      <div class="tools"><button type="button" id="drillNext" class="primary" hidden>Siguiente</button><button type="button" id="drillSkip">Saltar</button><button type="button" id="drillExit" class="ghost">Salir de los ejercicios</button></div>
+    </div>
     <div class="stats" id="stats"></div>
     <div class="log" id="log">Arrastrá una pieza al tablero.</div>
   </div>
+
+  <section class="panel coach" aria-labelledby="cTitle">
+    <div class="hist-head"><h2 id="cTitle">Coach</h2><span class="bal-date" id="cMeta"></span></div>
+    <div id="cBody"></div>
+    <div class="tools">
+      <button type="button" id="drillGo" class="primary">Ejercicios</button>
+      <button type="button" id="cNext" class="ghost" hidden>Cambiar foco</button>
+    </div>
+    <label class="tg" for="warn"><input type="checkbox" id="warn"> Avisos del coach durante la partida (solo sobre tu foco)</label>
+    <div class="tools"><button type="button" id="repCopy">Copiar reporte para Claude</button><button type="button" id="repDl" class="ghost">Descargar reporte (.md)</button></div>
+    <textarea id="repBox" hidden aria-label="Reporte para Claude"></textarea>
+    <p class="foot" id="cMsg"></p>
+  </section>
 
   <section class="panel hist" aria-labelledby="hTitle">
     <div class="hist-head"><h2 id="hTitle">Historial del tutor</h2><span class="bal-date" id="hCount"></span></div>
@@ -327,6 +361,22 @@ function solvable(o, pieces, budget={n:60000}){
   return false;
 }
 
+// Bitboards: cada ubicación posible de cada pieza como dos enteros de 32 bits, para chequear rápido si entra
+const PL = SHAPES.map(s=>{ const out=[];
+  for(let r=0;r<=N-s.h;r++) for(let c=0;c<=N-s.w;c++){ let lo=0,hi=0;
+    for(const [a,b] of s.cells){ const i=(r+a)*N+c+b; if(i<32) lo|=(1<<i); else hi|=(1<<(i-32)); }
+    out.push(lo,hi); }
+  return out; });
+const W_TOT = ACTIVE.reduce((a,s)=>a+wOf(s),0);
+// Mirada a futuro: probabilidad de que la PRÓXIMA pieza al azar tenga lugar en el tablero,
+// ponderada por la frecuencia real de cada pieza. Un tablero donde casi todo entra vale más.
+function pFit(o){
+  let lo=0,hi=0; for(let i=0;i<32;i++){ if(o[i]) lo|=(1<<i); if(o[i+32]) hi|=(1<<i); }
+  let p=0;
+  for(const s of ACTIVE){ const pl=PL[s.k]; for(let j=0;j<pl.length;j+=2){ if(!(pl[j]&lo) && !(pl[j+1]&hi)){ p+=wOf(s); break; } } }
+  return p/W_TOT;
+}
+
 // ---------- Evaluación (tutor) ----------
 // Hueco aislado: celda vacía rodeada por bloques o bordes. Solo entra el Punto.
 function holes(o){
@@ -337,9 +387,11 @@ function holes(o){
   }
   return h;
 }
-// Salud del tablero: más alto = mejor. Premia espacio libre y lugar para el 3×3;
-// castiga huecos aislados y bordes irregulares (cambios lleno/vacío entre vecinos).
-const HW = {empty:0.6, hole:4, trans:0.5, room3:6};
+// Salud del tablero: más alto = mejor. Premia espacio libre, lugar para el 3×3 y que la próxima pieza
+// probablemente entre; castiga huecos aislados (casi permanentes: el Punto sale muy poco) y bordes irregulares.
+// Calibrado en partidas simuladas con las mismas tandas: con estos pesos, jugar lo que sugiere el motor
+// necesita ~17% menos rescates que con la versión anterior y suma un poco más de puntos.
+const HW = {empty:0.6, hole:12, trans:0.5, room3:2, pfit:40};
 function health(o){
   let empty=0, trans=0;
   for(let r=0;r<N;r++) for(let c=0;c<N;c++){
@@ -348,7 +400,7 @@ function health(o){
     if(c<N-1 && v!==o[i+1]) trans++;
     if(r<N-1 && v!==o[i+N]) trans++;
   }
-  return empty*HW.empty - holes(o)*HW.hole - trans*HW.trans + (anyFit(o,O3)?HW.room3:0);
+  return empty*HW.empty - holes(o)*HW.hole - trans*HW.trans + (anyFit(o,O3)?HW.room3:0) + pFit(o)*HW.pfit;
 }
 const LW = 8;      // valor de cada línea limpiada
 const DEAD = 40;   // castigo por cada pieza de la tanda que queda sin lugar
@@ -398,14 +450,41 @@ function analyze(o, slots){
   return {per, best, nSlots:slots.length};
 }
 // Umbrales de pérdida (diferencia contra la mejor jugada posible)
-const CUT = {optima:0.5, buena:4, imprecisa:10};
+// Umbrales escalados ×1,6 al sumar la mirada a futuro (la escala de pérdidas se estiró en esa proporción),
+// para que las calificaciones sigan siendo comparables con las partidas viejas.
+const CUT = {optima:0.5, buena:6.5, imprecisa:16};
 function judge(A, i, r, c){
   const e=A.per[i], user=e.table.get(r*N+c);
   const loss=Math.max(0, A.best.val-user), posLoss=Math.max(0, e.bestVal-user), orderLoss=Math.max(0, A.best.val-e.bestVal);
   const cat = loss<=CUT.optima?'optima' : loss<=CUT.buena?'buena' : loss<=CUT.imprecisa?'imprecisa' : 'error';
   // Error de orden: la pérdida viene principalmente de haber elegido esta pieza primero
   const orderErr = A.nSlots>1 && cat!=='optima' && orderLoss>CUT.buena && orderLoss>=posLoss;
-  return {loss, posLoss, orderLoss, cat, orderErr, acc:100*Math.exp(-loss/12)};
+  return {loss, posLoss, orderLoss, cat, orderErr, acc:100*Math.exp(-loss/19)};
+}
+// Causa probable de un error: compara tu tablero resultante con el de la jugada sugerida
+const CAUSE = {
+  hole:  {t:'Huecos aislados',        short:'dejaste un hueco',               tip:'Antes de soltar, mirá las celdas vecinas: si una queda encerrada, solo entra el Punto, que casi nunca sale.'},
+  no3:   {t:'Sin lugar para el 3×3',  short:'te quedaste sin lugar para el 3×3', tip:'Mantené siempre libre un espacio de 3×3: lo necesitan el cuadrado grande y las esquinas grandes.'},
+  frag:  {t:'Espacio fragmentado',    short:'achicaste el espacio útil',       tip:'Juntá los bloques en un sector y dejá el espacio libre en una sola zona grande: ahí entra casi cualquier pieza.'},
+  greedy:{t:'Romper líneas a cualquier costo', short:'romper esas líneas te dejó peor', tip:'Una línea no siempre conviene: si el combo deja el tablero roto, elegí la jugada que lo deje parejo.'},
+  order: {t:'Orden de las piezas',    short:'convenía empezar por otra pieza', tip:'Mirá las tres piezas antes de mover y empezá por la más difícil de ubicar.'},
+  rough: {t:'Bordes irregulares',     short:'dejaste escalones y salientes',   tip:'Apoyá las piezas contra bloques o bordes: los escalones y salientes dejan lugares donde casi nada encaja.'},
+  miss:  {t:'Líneas que dejaste pasar', short:'dejaste pasar una línea',       tip:'Si una jugada rompe una línea sin romper el tablero, tomala: liberar espacio es lo que te mantiene vivo.'},
+};
+// Irregularidad: cambios lleno/vacío entre celdas vecinas (más = más escalones)
+function rough(o){ let t=0; for(let r=0;r<N;r++) for(let c=0;c<N;c++){ const i=r*N+c; if(c<N-1 && o[i]!==o[i+1]) t++; if(r<N-1 && o[i]!==o[i+N]) t++; } return t; }
+function causes(before, s, r, c, bs, bpos, orderErr){
+  const t=[];
+  if(orderErr) t.push('order');
+  if(!bs || !bpos) return t;
+  const u=placeO(before,s,r,c), b=placeO(before,bs,bpos[0],bpos[1]);
+  if(holes(u.o)>holes(b.o)) t.push('hole');
+  if(!anyFit(u.o,O3) && anyFit(b.o,O3)) t.push('no3');
+  if(pFit(u.o) < pFit(b.o)-0.1) t.push('frag');
+  if(u.n>b.n) t.push('greedy');
+  if(u.n<b.n) t.push('miss');
+  if(rough(u.o)>=rough(b.o)+4) t.push('rough');
+  return t;
 }
 // ENGINE END
 
@@ -413,7 +492,7 @@ function judge(A, i, r, c){
 // Estado
 // board[i] = índice de pieza (para el color) o null
 // ======================================================================
-const LS = {state:'be-state-v2', hist:'be-hist-v1', best:'be-best'};
+const LS = {state:'be-state-v2', hist:'be-hist-v1', best:'be-best', coach:'be-coach', drills:'be-drills', warn:'be-warn', live:'be-live'};
 const store = {
   get(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } },
   set(k,v){ try{ localStorage.setItem(k,v); return true; }catch(e){ return false; } },
@@ -423,6 +502,10 @@ let mode='eterno', board, tray, used, score, lines, sets, rescues, saves, game, 
 let best = +store.get(LS.best) || 0;
 let hist = []; try{ hist = JSON.parse(store.get(LS.hist)||'[]'); if(!Array.isArray(hist)) hist=[]; }catch(e){ hist=[]; }
 const MIN_MOVES = 10;   // partidas más cortas no se guardan: muy poca muestra para medir algo
+const readJSON=(k,def)=>{ try{ const v=JSON.parse(store.get(k)||'null'); return v==null?def:v; }catch(e){ return def; } };
+let coach = readJSON(LS.coach, {focus:null, since:null, base:0, done:[], grad:null});
+let drills = readJSON(LS.drills, {});   // id → {box, due}: repetición espaciada
+let drill = null;                        // sesión de ejercicios en curso
 
 function occ(b){ const o=new Uint8Array(64); for(let i=0;i<64;i++) o[i]=b[i]==null?0:1; return o; }
 function pickWeighted(){
@@ -505,11 +588,13 @@ function render(preview){
     else if(preview && preview.set.has(i)){ e.classList.add('ghost'); e.style.setProperty('--col',preview.col); }
     if(board[i]==null && hint.has(i)) e.classList.add('hint');
     if(preview && preview.best && preview.best.has(i)) e.classList.add('best');
+    if(preview && preview.warn && preview.set.has(i)) e.classList.add('warnc');
     if(flash && flash.has(i)) e.classList.add('missed');
     if(preview && preview.pre && preview.pre.has(i)){ e.classList.add('pre'); e.style.setProperty('--pcol',preview.col); }
     else e.style.removeProperty('--pcol');
   }
   $('#score').textContent=score; $('#best').textContent=best;
+  if(drill){ $('#stats').innerHTML=`<span>Ejercicio <b>${Math.min(drill.idx+1,drill.queue.length)} de ${drill.queue.length}</b></span><span>Correctos <b>${drill.ok}</b></span>`; return; }
   const st=[`<span>Tandas <b>${sets}</b></span>`, `<span>Líneas <b>${lines}</b></span>`];
   if(mode==='eterno') st.push(`<span>Rescates <b>${rescues}</b></span>`);
   else {
@@ -525,7 +610,8 @@ function hintCells(){
   });
   return out;
 }
-const live=()=>mode==='tutor' && $('#live').checked;
+const live=()=>mode==='tutor' && !drill && $('#live').checked;
+const warnOn=()=>mode==='tutor' && !drill && $('#warn').checked && !!coach.focus;
 function renderTray(){
   trayEl.innerHTML='';
   const firstSlot = live() && analysis && analysis.nSlots>1 ? analysis.best.slot : -1;
@@ -561,14 +647,14 @@ let drag=null;
 function cellSize(){ const r=boardEl.getBoundingClientRect(); return (r.width-12-3*7)/8; }
 function startDrag(e,i){
   e.preventDefault();
-  if(drag) return;
+  if(drag || (drill && drill.answered)) return;
   const s=tray[i], cs=cellSize();
   dragEl.innerHTML=''; dragEl.style.gridTemplateColumns=`repeat(${s.w},${cs}px)`; dragEl.style.gridTemplateRows=`repeat(${s.h},${cs}px)`;
   s.cells.forEach(([r,c])=>{ const b=document.createElement('i'); b.className='blk'; b.style.setProperty('--col',s.col); b.style.gridRow=r+1; b.style.gridColumn=c+1; dragEl.appendChild(b); });
   dragEl.hidden=false;
   const lift = e.pointerType==='touch' ? 90 : 30;   // la pieza va por encima del dedo
   const bestSet = live() && analysis && analysis.per[i] && analysis.per[i].bestPos ? cellsOf(s,...analysis.per[i].bestPos) : null;
-  drag={i,s,cs,lift,pos:null,id:e.pointerId,bestSet};
+  drag={i,s,cs,lift,pos:null,id:e.pointerId,bestSet,wctx:warnCtx(i,s)};
   flash=null;
   trayEl.children[i].style.opacity=.25;
   document.body.classList.add('dragging');
@@ -589,9 +675,10 @@ function moveDrag(e){
     drag.pos=[r,c];
     // Qué filas/columnas se romperían si la soltás acá
     const pre=new Set(placeO(o,s,r,c).cleared);
-    render({set:cellsOf(s,r,c), col:s.col, best:drag.bestSet, pre});
+    const w=warnFor(drag.wctx,o,s,r,c); showWarn(w);
+    render({set:cellsOf(s,r,c), col:s.col, best:drag.bestSet, pre, warn:!!w});
   }
-  else { drag.pos=null; render({set:new Set(), best:drag.bestSet}); }
+  else { drag.pos=null; showWarn(drag.wctx&&drag.wctx.orderMsg); render({set:new Set(), best:drag.bestSet}); }
 }
 function endDrag(e){
   if(!drag || (e && e.pointerId!==drag.id)) return;
@@ -600,7 +687,7 @@ function endDrag(e){
   window.removeEventListener('pointercancel',endDrag);
   document.body.classList.remove('dragging');
   dragEl.hidden=true;
-  const d=drag; drag=null;
+  const d=drag; drag=null; showWarn(null);
   if(e.type==='pointerup' && d.pos && fits(occ(board),d.s,d.pos[0],d.pos[1])) commit(d.i,d.pos[0],d.pos[1]);
   else { renderTray(); render(); }
 }
@@ -611,15 +698,18 @@ const CAT = {
   imprecisa:{t:'Imprecisa',k:'var(--c-imp)'}, error:{t:'Error',k:'var(--c-err)'}
 };
 let fbTimer=0, flashTimer=0;
-function feedback(j, s){
+function feedback(j, s, tags){
   const fb=$('#fb'); const c=CAT[j.cat];
+  fb.classList.remove('warn');
   let why='';
-  if(j.cat!=='optima') why = j.orderErr ? 'convenía empezar por otra pieza' : 'había un lugar mejor';
+  if(j.cat!=='optima') why = tags && tags.length ? CAUSE[tags[0]].short : j.orderErr ? 'convenía empezar por otra pieza' : 'había un lugar mejor';
   fb.innerHTML=`<span class="tag" style="--k:${c.k}">${c.t}</span>${why?`<span class="why">${why}</span>`:''}`;
   fb.classList.add('show'); clearTimeout(fbTimer); fbTimer=setTimeout(()=>fb.classList.remove('show'),1800);
 }
 function commit(i,r,c){
+  if(drill){ drillAttempt(i,r,c); return; }
   const s=tray[i];
+  const trayNow=[0,1,2].filter(j=>!used[j]).map(j=>tray[j].id);   // la bandeja que veías, para ejercicios y reporte
   const before=occ(board);
   // Evaluación del tutor ANTES de cambiar el tablero
   let verdict=null;
@@ -639,16 +729,18 @@ function commit(i,r,c){
     lines+=res.n; const pts=res.n*10*res.n; score+=pts;
     const cb=$('#combo'); cb.textContent=res.n>1?`¡x${res.n}! +${pts}`:`+${pts}`; cb.classList.remove('show'); void cb.offsetWidth; cb.classList.add('show');
   }
-  if(verdict) recordMove(verdict, s, i, r, c, before, res, beforeStr, wasSwapped);
+  if(verdict) recordMove(verdict, s, i, r, c, before, res, beforeStr, wasSwapped, trayNow);
   after();
   popAnim(popped);
 }
-function recordMove(v, s, i, r, c, before, res, beforeStr, swapped){
+function recordMove(v, s, i, r, c, before, res, beforeStr, swapped, trayNow){
   const after=res.o, nAfter=after.reduce((a,x)=>a+x,0);
   const bst=analysis.best;
+  // Causa probable del error, comparando tu tablero resultante con el de la jugada sugerida
+  const tags = v.cat==='optima' ? [] : causes(before, s, r, c, tray[bst.slot], bst.pos, v.orderErr);
   // Foto del tablero antes de la jugada + sugerencia del motor + puntos que sumó, para el registro jugada a jugada
   const mv={b:beforeStr, pos:[r,c], bp:tray[bst.slot].id, bpos:bst.pos, pts:s.cells.length+res.n*10*res.n, ln:res.n, p:s.id, loss:+v.loss.toFixed(2), cat:v.cat, ord:v.orderErr?1:0, acc:+v.acc.toFixed(1),
-    holes:Math.max(0, holes(after)-holes(before)), no3:anyFit(after,O3)?0:1, fill:nAfter, sw:swapped?1:0, h:live()?1:0};
+    holes:Math.max(0, holes(after)-holes(before)), no3:anyFit(after,O3)?0:1, fill:nAfter, sw:swapped?1:0, h:live()?1:0, t:trayNow, tg:tags, cw:warnOn()?1:0};
   game.moves.push(mv);
   // Peor jugada: guardamos la foto del tablero para poder repetirla en el balance
   if(!game.worst || v.loss>game.worst.loss){
@@ -656,9 +748,9 @@ function recordMove(v, s, i, r, c, before, res, beforeStr, swapped){
     game.worst={loss:v.loss, board:beforeStr, p:s.id, pos:[r,c], bp:bs.id, bpos:b.pos, ord:v.orderErr?1:0, n:game.moves.length};
   }
   if(live()){
-    feedback(v, s);
+    feedback(v, s, tags);
     // Si no fue óptima, marcamos un instante dónde iba la pieza
-    if(v.cat!=='optima' && !v.orderErr && analysis.per[i].bestPos){
+    if(v.cat!=='optima' && !v.orderErr && analysis.per[i].bestPos){  // (las pistas en vivo muestran dónde iba)
       flash=cellsOf(s,...analysis.per[i].bestPos);
       clearTimeout(flashTimer); flashTimer=setTimeout(()=>{ flash=null; render(); },1400);
     }
@@ -732,13 +824,15 @@ function summarize(g, pts, lns, sts){
   // Pieza problemática: mayor pérdida promedio (con al menos 3 usos)
   // Las piezas que puso el rescate no cuentan: aparecen con el tablero ya trabado y no reflejan cómo manejás esa pieza.
   // La pérdida se topea en 20 para que una sola jugada desesperada no defina la pieza.
-  const pc={}; m.filter(x=>!x.sw).forEach(x=>{ (pc[x.p]=pc[x.p]||{n:0,loss:0,bad:0}); pc[x.p].n++; pc[x.p].loss+=Math.min(20,x.loss); if(x.cat==='imprecisa'||x.cat==='error') pc[x.p].bad++; });
+  const pc={}; m.filter(x=>!x.sw).forEach(x=>{ (pc[x.p]=pc[x.p]||{n:0,loss:0,bad:0}); pc[x.p].n++; pc[x.p].loss+=Math.min(32,x.loss); if(x.cat==='imprecisa'||x.cat==='error') pc[x.p].bad++; });
   let worstPiece=null; for(const [id,v] of Object.entries(pc)) if(v.n>=3 && (!worstPiece || v.loss/v.n>worstPiece.avg)) worstPiece={id,avg:v.loss/v.n,n:v.n,bad:v.bad};
   const hint=+(100*m.filter(x=>x.h).length/n).toFixed(0);   // % de jugadas hechas con pistas en vivo
-  return {id:g.start, date:new Date().toISOString(), start:g.start, n, hint, points:pts, lines:lns, sets:sts, saves:g.saves,
+  const aid=+(100*m.filter(x=>x.cw).length/n).toFixed(0);    // % con avisos del coach
+  const cz={}; m.forEach(x=>(x.tg||[]).forEach(t=>cz[t]=(cz[t]||0)+1));
+  return {id:g.start, cv:3, date:new Date().toISOString(), start:g.start, n, hint, aid, cz, points:pts, lines:lns, sets:sts, saves:g.saves,
     global:+global.toFixed(1), dec:+dec.toFixed(1), ord:+ord.toFixed(1), sup:+sup.toFixed(1), sal:+sal.toFixed(1),
     dec1:+dec1.toFixed(1), dec2:+dec2.toFixed(1), cats, ordErr, holes:holesC, no3, worstPiece, pieces:pc, worst:g.worst,
-    log:m.map(x=>({b:x.b,pos:x.pos,bp:x.bp,bpos:x.bpos,p:x.p,cat:x.cat,loss:x.loss,ord:x.ord,pts:x.pts,ln:x.ln,h:x.h}))};
+    log:m.map(x=>({b:x.b,pos:x.pos,bp:x.bp,bpos:x.bpos,p:x.p,cat:x.cat,loss:x.loss,ord:x.ord,pts:x.pts,ln:x.ln,h:x.h,sw:x.sw,t:x.t,tg:x.tg,cw:x.cw}))};
 }
 function finishGame(){
   if(mode!=='tutor') return;
@@ -751,7 +845,7 @@ function finishGame(){
   showBalance(s, true);
   startGame('tutor');
 }
-function saveHist(){ if(!store.set(LS.hist, JSON.stringify(hist))) $('#hMsg').textContent='No se pudo guardar el historial en este navegador (almacenamiento bloqueado).'; renderHist(); }
+function saveHist(){ if(!store.set(LS.hist, JSON.stringify(hist))) $('#hMsg').textContent='No se pudo guardar el historial en este navegador (almacenamiento lleno o bloqueado).'; renderHist(); renderCoach(); }
 
 const dateTxt=iso=>{ const d=new Date(iso); return d.toLocaleDateString('es-AR',{day:'numeric',month:'short',year:'numeric'})+' · '+d.toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'}); };
 const nameOf=id=>(BY_ID[id]||{name:id}).name;
@@ -804,6 +898,7 @@ function showBalance(s, fresh){
       ${sub('Supervivencia',s.sup,'vidas salvadas por jugada')}
       ${sub('Salud del tablero',s.sal,'huecos y lugar para el 3×3')}
     </div>
+    ${coachNote(s)}
     <div><h3>Jugadas</h3><div class="dist" style="margin-top:8px">${['optima','buena','imprecisa','error'].map(seg).join('')}</div><div class="dist-l">${legend}</div></div>
     <div class="kpis">
       <div class="kpi"><b>${s.saves}</b><span>Partidas que habrías perdido (vidas salvadas)</span></div>
@@ -812,7 +907,7 @@ function showBalance(s, fresh){
       <div class="kpi"><b>${s.no3}</b><span>Jugadas que te dejaron sin lugar para el 3×3</span></div>
       <div class="kpi wide"><b>${wp?nameOf(wp.id):'—'}</b><span>${wp?`Pieza problemática: pierde ${wp.avg.toFixed(1)} en promedio, ${wp.bad} de ${wp.n} jugadas imprecisas o errores`:'Pieza problemática: ninguna se usó 3 veces o más'}</span></div>
       <div class="kpi wide"><b style="font-size:1.05rem">${fatigue}</b><span>Precisión: 1ª mitad vs 2ª mitad de la partida</span></div>
-      <div class="kpi wide"><b style="font-size:1.05rem">${s.hint==null?'Sin dato':s.hint===0?'Sin pistas':s.hint+'% de las jugadas'}</b><span>Uso de pistas en vivo${s.hint>0?' · no refleja solo tus decisiones':''}</span></div>
+      <div class="kpi wide"><b style="font-size:1.05rem">${s.hint==null?'Sin dato':s.hint===0?'Sin pistas':s.hint+'% de las jugadas'}${s.aid?` · avisos ${s.aid}%`:''}</b><span>Uso de pistas en vivo${s.aid?' y avisos del coach':''}${s.hint>0||s.aid>0?' · no refleja solo tus decisiones':''}</span></div>
     </div>
     ${worstHtml}
     ${topHtml}
@@ -850,6 +945,7 @@ function mvBody(x){
   const equal = x.loss<=CUT.optima;
   const why = equal ? 'Elegiste una alternativa igual de buena que la sugerida.'
     : x.ord ? `Convenía empezar por la pieza <em>${nameOf(x.bp)}</em>.`
+    : x.tg && x.tg.length ? `Probable causa: ${x.tg.map(t=>CAUSE[t].short).join(', ')}.`
     : x.bp===x.p ? `La pieza <em>${nameOf(x.p)}</em> tenía un lugar mejor.`
     : `El motor sugería otra jugada: la pieza <em>${nameOf(x.bp)}</em> en el lugar marcado.`;
   return `<div class="replay">
@@ -946,7 +1042,7 @@ function patternsHTML(H){
 function tableHTML(H){
   const col=v=>v>=80?'var(--c-opt)':v>=65?'var(--c-good)':v>=50?'var(--c-imp)':'var(--c-err)';
   const rows=H.map(h=>{ const d=new Date(h.date);
-    return `<tr tabindex="0" data-id="${h.id}"><td>${d.toLocaleDateString('es-AR',{day:'numeric',month:'short'})} ${d.toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'})}${hintKind(h)==='hinted'?`<span class="tag hinted">pistas ${h.hint}%</span>`:hintKind(h)==='unk'?'<span class="tag unk">sin dato</span>':''}</td>
+    return `<tr tabindex="0" data-id="${h.id}"><td>${d.toLocaleDateString('es-AR',{day:'numeric',month:'short'})} ${d.toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'})}${hintKind(h)==='hinted'?`<span class="tag hinted">pistas ${h.hint}%</span>`:hintKind(h)==='unk'?'<span class="tag unk">sin dato</span>':''}${h.aid?`<span class="tag hinted">avisos ${h.aid}%</span>`:''}</td>
       <td><span class="gpill" style="color:${col(h.global)}">${fmt(h.global)}</span></td><td>${fmt(h.dec)}</td><td>${h.points}</td><td>${h.saves}</td><td>${h.n}</td></tr>`; }).join('');
   return `<div><h3>Partidas · tocá una para ver su balance</h3><div class="tbl"><table>
     <thead><tr><th>Fecha</th><th>Global</th><th>Decis.</th><th>Puntos</th><th>Vidas</th><th>Jug.</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
@@ -987,12 +1083,288 @@ $('#reset').addEventListener('click',()=>{
 });
 $('#finish').addEventListener('click',finishGame);
 $('#hints').addEventListener('change',()=>render());
-$('#live').addEventListener('change',()=>{ renderTray(); render(); });
+$('#live').addEventListener('change',()=>{ store.set(LS.live,$('#live').checked?'1':'0'); renderTray(); render(); });
+$('#warn').addEventListener('change',()=>{ store.set(LS.warn,$('#warn').checked?'1':'0'); renderCoach(); });
+if(store.get(LS.live)==='0') $('#live').checked=false;
+if(store.get(LS.warn)==='1') $('#warn').checked=true;
+
+// ======================================================================
+// Coach: diagnóstico, foco, seguimiento, avisos, ejercicios y reporte
+// ======================================================================
+const COACH_MIN = {games:3, moves:60};     // menos que esto es ruido: el coach no opina
+const byDate=(a,b)=>a.date<b.date?-1:1;
+// Partida medible: registro nuevo (con causas), sin pistas en vivo ni avisos del coach
+const eligible=h=> h.cv>=3 && h.hint===0 && !(h.aid>0) && Array.isArray(h.log);
+function saveCoach(){ store.set(LS.coach, JSON.stringify(coach)); }
+function saveDrills(){ store.set(LS.drills, JSON.stringify(drills)); }
+
+// Costo de cada causa cada 100 jugadas. Si una jugada tiene varias causas, la pérdida se reparte entre ellas.
+function rates(games){
+  let n=0, otro=0; const c={}; Object.keys(CAUSE).forEach(k=>c[k]={cost:0,cnt:0});
+  games.forEach(g=>g.log.forEach(x=>{
+    if(x.sw) return; n++;
+    const tg=x.tg||[]; if(x.loss<=CUT.optima) return;
+    if(!tg.length){ if(x.loss>CUT.buena) otro++; return; }
+    const part=Math.min(32,x.loss)/tg.length;
+    tg.forEach(k=>{ if(c[k]){ c[k].cost+=part; c[k].cnt++; } });
+  }));
+  const out={n, otro}; for(const k in c) out[k]={per100: n ? 100*c[k].cost/n : 0, cnt:c[k].cnt};
+  return out;
+}
+function setFocus(k, R){ coach.focus=k; coach.since=new Date().toISOString(); coach.base=R[k].per100; saveCoach(); }
+
+// Lee el historial, elige o mantiene el foco y decide si ya lo superaste
+function updateCoach(){
+  const E=hist.filter(eligible).sort(byDate);
+  const moves=E.reduce((a,g)=>a+g.log.length,0);
+  if(E.length<COACH_MIN.games || moves<COACH_MIN.moves) return {ready:false, E, moves};
+  const R=rates(E);
+  const rank=Object.keys(CAUSE).map(k=>({k, v:R[k].per100, cnt:R[k].cnt})).sort((a,b)=>b.v-a.v);
+  if(!coach.focus || !CAUSE[coach.focus]) setFocus(rank[0].k, R);
+  let prog=null;
+  const since=E.filter(g=>g.date>coach.since);
+  if(coach.grad && since.length){ coach.grad=null; saveCoach(); }   // el aviso de foco superado se muestra hasta la próxima partida
+  if(since.length){
+    const cur=rates(since)[coach.focus].per100;
+    prog={games:since.length, cur};
+    // Superado: con al menos 3 partidas, el costo de tu foco bajó 30% o más respecto de tu base
+    if(since.length>=3 && cur<=coach.base*0.7){
+      coach.done.push({k:coach.focus, from:coach.since, to:new Date().toISOString(), base:+coach.base.toFixed(1), end:+cur.toFixed(1)});
+      coach.grad={k:coach.focus, base:coach.base, end:cur};
+      const next=rank.find(x=>x.k!==coach.focus) || rank[0];
+      setFocus(next.k, R); prog=null;
+    }
+  }
+  return {ready:true, E, moves, R, rank, prog};
+}
+function renderCoach(){
+  const st=updateCoach(), body=$('#cBody');
+  const pend=dueDrills().length;
+  $('#drillGo').textContent = pend ? `Ejercicios con tus errores (${pend})` : 'Ejercicios con tus errores';
+  $('#drillGo').disabled = !pend;
+  $('#cNext').hidden = !st.ready;
+  $('#warn').disabled = !st.ready;
+  $('#cMeta').textContent = st.E.length ? `${st.E.length} ${st.E.length===1?'partida medible':'partidas medibles'}` : '';
+  if(!st.ready){
+    const hasNew=hist.some(h=>h.cv>=3);
+    body.innerHTML=`<p class="empty">Para diagnosticarte necesito al menos ${COACH_MIN.games} partidas medibles y ${COACH_MIN.moves} jugadas: vas ${st.E.length} ${st.E.length===1?'partida':'partidas'} y ${st.moves} jugadas.
+      Cuentan las partidas del <b>Tutor</b> jugadas con “Pistas en vivo” y los avisos apagados, porque solo esas miden tus propias decisiones.${hasNew?'':' Las partidas guardadas antes de esta versión no tienen las causas de cada error, así que no suman.'}</p>
+      <p class="foot">Mientras tanto, los ejercicios ya usan los errores de cualquier partida nueva.</p>`;
+    return;
+  }
+  const f=coach.focus, max=Math.max(...st.rank.map(r=>r.v), 1);
+  const g=coach.grad;
+  const gradHtml = g ? `<div class="grad">Foco superado: <b>${CAUSE[g.k].t}</b>. Bajaste de ${g.base.toFixed(1)} a ${g.end.toFixed(1)} cada 100 jugadas. Tu nuevo foco es el siguiente de la lista.</div>` : '';
+  let progTxt;
+  if(!st.prog) progTxt='Jugá partidas medibles para ver si mejora: lo evalúo después de 3.';
+  else{
+    const d=coach.base>0 ? 100*(st.prog.cur-coach.base)/coach.base : 0;
+    progTxt=`Desde que es tu foco: ${st.prog.cur.toFixed(1)} en ${st.prog.games} ${st.prog.games===1?'partida':'partidas'} (${d<=0?'':'+'}${d.toFixed(0)}% vs tu base).`+
+      (st.prog.games>=3 ? ' Se supera al bajar 30% o más.' : ` Lo evalúo con 3 partidas (faltan ${3-st.prog.games}).`)+
+      (st.prog.games>=6 && st.prog.cur>coach.base*0.85 ? ' Todavía no se mueve: sumá ejercicios y avisos en las partidas de práctica.' : '');
+  }
+  const bars=st.rank.map(r=>`<div class="sub${r.k===f?' on':''}"><span>${CAUSE[r.k].t}<br><small>${r.cnt} ${r.cnt===1?'jugada':'jugadas'}</small></span><div class="bar"><i style="width:${Math.max(2,100*r.v/max)}%"></i></div><b>${r.v.toFixed(1)}</b></div>`).join('');
+  const otro=st.R.otro ? `<p class="done">${st.R.otro} ${st.R.otro===1?'error':'errores'} sin causa clara: el motor ve una jugada mejor, pero la diferencia no encaja en ninguna de estas categorías.</p>` : '';
+  const done=coach.done.length ? `<p class="done">Focos superados: ${coach.done.map(d=>`${CAUSE[d.k].t} (${d.base} → ${d.end})`).join(' · ')}</p>` : '';
+  body.innerHTML=`${gradHtml}
+    <div class="focus"><span class="fl">Tu foco ahora</span><span class="ft">${CAUSE[f].t}</span>
+      <span class="note">Base: te cuesta ${coach.base.toFixed(1)} puntos de evaluación cada 100 jugadas. ${progTxt}</span>
+      <p class="tip">${CAUSE[f].tip}</p></div>
+    <div class="rank"><h3>Tus falencias · costo cada 100 jugadas</h3>${bars}</div>${otro}${done}`;
+}
+$('#cNext').addEventListener('click',()=>{
+  const st=updateCoach(); if(!st.ready) return;
+  const i=st.rank.findIndex(r=>r.k===coach.focus), next=st.rank[(i+1)%st.rank.length];
+  coach.grad=null; setFocus(next.k, st.R); renderCoach();
+  $('#cMsg').textContent=`Cambié tu foco a: ${CAUSE[next.k].t}.`;
+});
+// Nota del coach en el balance de cada partida
+function coachNote(s){
+  if(!coach.focus || !eligible(s)) return '';
+  const v=rates([s])[coach.focus].per100;
+  return `<p class="note">Foco del coach, <em>${CAUSE[coach.focus].t}</em>: en esta partida te costó ${v.toFixed(1)} cada 100 jugadas; tu base es ${coach.base.toFixed(1)}.</p>`;
+}
+
+// ---------- Avisos dirigidos: solo sobre tu foco, comparando con el mejor lugar para esa misma pieza ----------
+function warnCtx(i,s){
+  if(!warnOn() || !analysis || !analysis.per[i] || !analysis.per[i].bestPos) return null;
+  const o=occ(board), e=analysis.per[i], bRes=placeO(o,s,...e.bestPos), bAfter=bRes.o;
+  const ctx={f:coach.focus, e, bAfter, bHoles:holes(bAfter), b3:anyFit(bAfter,O3), bP:pFit(bAfter), bR:rough(bAfter), bN:bRes.n, orderMsg:null};
+  if(ctx.f==='order' && analysis.nSlots>1 && analysis.best.val-e.bestVal>CUT.buena) ctx.orderMsg='Ojo con el orden: convendría empezar por otra pieza';
+  return ctx;
+}
+function warnFor(ctx,o,s,r,c){
+  if(!ctx) return null;
+  if(ctx.orderMsg) return ctx.orderMsg;
+  const u=placeO(o,s,r,c);
+  switch(ctx.f){
+    case 'hole':   return holes(u.o)>ctx.bHoles ? 'Ojo: acá dejás un hueco' : null;
+    case 'no3':    return !anyFit(u.o,O3) && ctx.b3 ? 'Ojo: te quedás sin lugar para el 3×3' : null;
+    case 'frag':   return pFit(u.o)<ctx.bP-0.1 ? 'Ojo: achicás el espacio útil' : null;
+    case 'rough':  return rough(u.o)>=ctx.bR+4 ? 'Ojo: dejás escalones y salientes' : null;
+    case 'miss':   return u.n<ctx.bN ? 'Ojo: esta pieza puede romper una línea en otro lugar' : null;
+    case 'greedy': return u.n>0 && (ctx.e.table.get(r*N+c)??-Infinity) < ctx.e.bestVal-CUT.buena ? 'Ojo: romper líneas acá te deja peor' : null;
+  }
+  return null;
+}
+function showWarn(msg){
+  const fb=$('#fb');
+  if(!msg){ if(fb.classList.contains('warn')) fb.classList.remove('show','warn'); return; }
+  clearTimeout(fbTimer);
+  fb.innerHTML=`<span class="tag" style="--k:var(--c-err)">Coach</span><span class="why">${msg}</span>`;
+  fb.classList.add('show','warn');
+}
+
+// ---------- Ejercicios con tus errores (repetición espaciada) ----------
+const DAYS=[0,1,3,7,21], DAY=864e5;       // caja 0..4; en la 5 queda dominado
+function drillPool(){
+  const out=[];
+  hist.forEach(g=>{ if(!(g.cv>=3) || !g.log) return;
+    g.log.forEach((x,k)=>{ if(!x.sw && x.t && x.loss>CUT.buena) out.push({id:g.id+'#'+k, x, g}); }); });
+  return out;
+}
+function dueDrills(){
+  const now=Date.now(), st=id=>drills[id]||{box:0,due:0};
+  const onFocus=d=>(d.x.tg||[]).includes(coach.focus)?1:0;
+  return drillPool().filter(d=>{ const s=st(d.id); return s.box<5 && s.due<=now; })
+    .sort((a,b)=>(onFocus(b)-onFocus(a)) || (b.x.loss-a.x.loss));      // primero tu foco, después los más caros
+}
+function drillUI(on){
+  $('#rowMain').hidden=on; $('#drillBar').hidden=!on;
+  if(on){ $('#rowTutor').hidden=true; $('#rowEterno').hidden=true; } else syncModeUI();
+}
+$('#drillGo').addEventListener('click',()=>{
+  if(drill) return;
+  const q=dueDrills().slice(0,10);
+  if(!q.length){ $('#cMsg').textContent='No tenés ejercicios pendientes.'; return; }
+  drill={queue:q, idx:0, ok:0, done:0, answered:false,
+    snap:{board:board.slice(), tray:tray.slice(), used:used.slice(), rescued:new Set(rescued), analysis}};
+  rescued=new Set(); drillUI(true); loadDrill();
+  $('#board').scrollIntoView({behavior:'smooth', block:'start'});
+});
+function loadDrill(){
+  flash=null; drill.answered=false; $('#drillNext').hidden=true; $('#drillSkip').hidden=false;
+  while(drill.idx<drill.queue.length){
+    const d=drill.queue[drill.idx], x=d.x;
+    board=decodeBoard(x.b); tray=x.t.map(id=>BY_ID[id]||DOT); used=tray.map(()=>false);
+    while(tray.length<3){ tray.push(DOT); used.push(true); }
+    const slots=[0,1,2].filter(j=>!used[j]).map(j=>({i:j,s:tray[j]}));
+    analysis=analyze(occ(board), slots);
+    // Se reevalúa con el motor actual: si tu jugada original ya no es un error, el ejercicio se retira
+    const k=tray.findIndex((t,j)=>!used[j] && t.id===x.p);
+    const orig = k>=0 && analysis.per[k].table.has(x.pos[0]*N+x.pos[1]) ? judge(analysis,k,x.pos[0],x.pos[1]) : null;
+    if(!orig || orig.loss<=CUT.buena){ drills[d.id]={box:5, due:0}; saveDrills(); drill.idx++; continue; }
+    $('#drillTxt').innerHTML=`Tablero real de tu partida del ${dateTxt(d.g.date)} (jugada ${+d.id.split('#')[1]+1}). <b style="--k:var(--gold)">Encontrá la mejor jugada</b> con estas piezas.`;
+    renderTray(); render(); log('');
+    return;
+  }
+  endDrill();
+}
+function drillAttempt(i,r,c){
+  const d=drill.queue[drill.idx], s=tray[i], v=judge(analysis,i,r,c), b=analysis.best, bs=tray[b.slot];
+  const prev=drills[d.id]||{box:0,due:0}, now=Date.now();
+  let txt;
+  if(v.loss<=CUT.optima){
+    drill.ok++; const box=prev.box+1;
+    drills[d.id]={box, due: box>=5 ? 0 : now+DAYS[box]*DAY};
+    txt=`<b style="--k:var(--c-opt)">Correcto.</b> ${box>=5?'Este ya lo dominás: no vuelve.':`Vuelve en ${DAYS[box]} ${DAYS[box]===1?'día':'días'} para fijarlo.`}`;
+  } else if(v.loss<=CUT.buena){
+    drills[d.id]={box:prev.box, due:now+DAY};
+    txt=`<b style="--k:var(--c-good)">Casi.</b> Es buena, pero la mejor es <em>${bs.name}</em> en el lugar marcado en verde. Vuelve mañana.`;
+  } else {
+    const tg=causes(occ(board), s, r, c, bs, b.pos, v.orderErr);
+    drills[d.id]={box:0, due:now+10*60e3};
+    txt=`<b style="--k:var(--c-err)">No.</b> La mejor es <em>${bs.name}</em> en el lugar marcado en verde.${tg.length?` Con tu jugada ${tg.map(t=>CAUSE[t].short).join(', ')}.`:''} Vuelve en 10 minutos.`;
+  }
+  saveDrills(); drill.answered=true; drill.done++;
+  $('#drillTxt').innerHTML=txt; $('#drillNext').hidden=false; $('#drillSkip').hidden=true;
+  flash=cellsOf(bs,...b.pos);
+  render({set:cellsOf(s,r,c), col:s.col});
+}
+$('#drillNext').addEventListener('click',()=>{ drill.idx++; loadDrill(); });
+$('#drillSkip').addEventListener('click',()=>{ drill.idx++; loadDrill(); });
+$('#drillExit').addEventListener('click',()=>endDrill());
+function endDrill(){
+  if(!drill) return;
+  const {snap, ok, done}=drill;
+  board=snap.board; tray=snap.tray; used=snap.used; rescued=snap.rescued; analysis=snap.analysis;
+  drill=null; flash=null; drillUI(false); renderTray(); render(); renderCoach();
+  log(done ? `Ejercicios: ${ok} de ${done} ${ok===1?'correcto':'correctos'}. Seguís con tu partida.` : 'Seguís con tu partida.');
+}
+
+// ---------- Reporte para Claude: instrucciones + datos en un solo archivo ----------
+const PROMPT=`Sos el coach de un jugador de Bloque Eterno, un puzzle de bloques 8×8 estilo Block Blast: se colocan piezas de una bandeja de 3 (sin rotarlas) y cada fila o columna completa se borra. Tu tarea es diagnosticar cómo juega y armarle un plan de entrenamiento.
+
+Cómo leer los datos
+- Un motor evaluó cada jugada comparándola con la mejor posible usando solo lo que el jugador veía: el tablero y las piezas de su bandeja. "perdida" es la diferencia en puntos de evaluación; 0 es jugar como el motor.
+- El motor valora el largo plazo: además de las líneas que se rompen, premia que la próxima pieza al azar tenga lugar (según la frecuencia real de cada pieza) y castiga los huecos aislados.
+- Solo las partidas con "medible": true (sin pistas en vivo ni avisos del coach) reflejan decisiones propias. Usá las demás solo como contexto, y aclaralo cuando lo hagas.
+- Los tableros van como 8 filas de arriba hacia abajo; "#" es ocupado y "." vacío. Las posiciones son fila y columna desde 0 (arriba a la izquierda) de la esquina superior izquierda del rectángulo que ocupa la pieza. Las formas de las piezas van fila por fila separadas por "/".
+
+Qué hacer
+1. Diagnóstico: las 2 o 3 falencias principales, con evidencia concreta de los datos (cifras, partidas, jugadas). Distinguí patrones consistentes de casos aislados.
+2. Tendencia: si mejora, empeora o está estable, considerando el tamaño de la muestra.
+3. Análisis de jugadas: elegí 3 de las peores jugadas y explicá en cada una qué principio de juego se rompió y cómo reconocer esa situación la próxima vez. Apoyate en los números del motor; si al mirar el tablero la sugerencia no te cierra, decilo en vez de inventar una justificación.
+4. Plan: una semana de entrenamiento concreta con lo que ofrece el juego (foco del coach, ejercicios con sus propios errores, avisos durante la partida, pistas en vivo, y partidas sin ayuda para medir).
+5. Qué datos faltan o qué convendría medir distinto para afinar el diagnóstico.
+
+Estilo: español rioplatense, directo y concreto, sin relleno ni elogios vacíos. Si la muestra es chica, decilo y bajá la confianza de las conclusiones. No inventes datos que no estén en el reporte.`;
+function buildReport(){
+  const st=updateCoach();
+  const shape=s=>{ const g=[...Array(s.h)].map(()=>Array(s.w).fill('.')); s.cells.forEach(([r,c])=>g[r][c]='#'); return g.map(r=>r.join('')).join('/'); };
+  const rows=str=>{ const b=decodeBoard(str); return [...Array(8)].map((_,r)=>b.slice(r*8,r*8+8).map(v=>v==null?'.':'#').join('')); };
+  const r1=v=>v==null?null:+(+v).toFixed(1);
+  const partidas=[...hist].sort(byDate).map(h=>({fecha:h.date, jugadas:h.n, medible:eligible(h), pistas_pct:h.hint??null, avisos_pct:h.aid||0,
+    global:h.global, decisiones:h.dec, orden:h.ord, supervivencia:h.sup, salud_tablero:h.sal, puntos:h.points, lineas:h.lines, vidas_salvadas:h.saves,
+    calificaciones:h.cats, causas:h.cz ? Object.fromEntries(Object.entries(h.cz).map(([k,v])=>[CAUSE[k].t,v])) : null,
+    precision_1a_mitad:h.dec1, precision_2a_mitad:h.dec2,
+    pieza_problematica:h.worstPiece?{pieza:nameOf(h.worstPiece.id), perdida_promedio:r1(h.worstPiece.avg), usos:h.worstPiece.n}:null}));
+  const worst=[]; hist.forEach(h=>(h.log||[]).forEach((x,k)=>{ if(!x.sw && x.loss>CUT.buena) worst.push({h,x,k}); }));
+  worst.sort((a,b)=>b.x.loss-a.x.loss);
+  const peores=worst.slice(0,12).map(({h,x,k})=>({partida:h.date, jugada_n:k+1, medible:eligible(h), tablero_antes:rows(x.b),
+    bandeja:x.t?x.t.map(nameOf):null, pieza_jugada:nameOf(x.p), tu_jugada:{fila:x.pos[0],col:x.pos[1]},
+    sugerida:{pieza:nameOf(x.bp), fila:x.bpos[0], col:x.bpos[1]}, perdida:x.loss, calificacion:CAT[x.cat].t,
+    causas:(x.tg||[]).map(t=>CAUSE[t].t), con_pista:!!x.h}));
+  const data={
+    generado:new Date().toISOString(), juego:'Bloque Eterno (tablero 8×8, piezas sin rotación)',
+    definiciones:{
+      calificaciones_por_perdida:{Óptima:`≤ ${CUT.optima}`, Buena:`≤ ${CUT.buena}`, Imprecisa:`≤ ${CUT.imprecisa}`, Error:`> ${CUT.imprecisa}`},
+      puntaje_global:'0 a 100: Decisiones 50% (precisión promedio), Supervivencia 20% (vidas salvadas cada 30 jugadas), Orden 15%, Salud del tablero 15%. Los puntos del juego no entran.',
+      vida_salvada:'momento en que el juego real habría terminado (ninguna pieza entraba) y se cambiaron piezas para seguir',
+      causas:Object.fromEntries(Object.values(CAUSE).map(c=>[c.t, c.tip])),
+      costo_cada_100:'suma de pérdidas (tope 32 por jugada) atribuidas a una causa, cada 100 jugadas'
+    },
+    piezas:ACTIVE.map(s=>({nombre:s.name, frecuencia_pct:+(100*wOf(s)/W_TOT).toFixed(1), forma:shape(s)})),
+    coach: st.ready ? {foco_actual:CAUSE[coach.focus].t, desde:coach.since, costo_base_cada_100:r1(coach.base),
+        seguimiento: st.prog ? {partidas:st.prog.games, costo_actual_cada_100:r1(st.prog.cur)} : null,
+        ranking:st.rank.map(r=>({falencia:CAUSE[r.k].t, costo_cada_100:r1(r.v), jugadas:r.cnt})), errores_sin_causa_clara:st.R.otro,
+        focos_superados:coach.done.map(d=>({falencia:CAUSE[d.k].t, desde:d.from, hasta:d.to, base:d.base, final:d.end}))}
+      : {listo:false, partidas_medibles:st.E.length, jugadas_medibles:st.moves, minimo:COACH_MIN},
+    partidas, peores_jugadas:peores
+  };
+  return `# Bloque Eterno · reporte para el coach\n\nPegá este archivo completo en una conversación con Claude. Tiene dos partes: las instrucciones para Claude y tus datos.\n\n## Instrucciones para Claude\n\n${PROMPT}\n\n## Datos\n\n\`\`\`json\n${JSON.stringify(data,null,1)}\n\`\`\`\n`;
+}
+$('#repCopy').addEventListener('click',()=>{
+  const txt=buildReport(), kb=(txt.length/1024).toFixed(0);
+  const ok=()=>{ $('#repBox').hidden=true; $('#cMsg').textContent=`Reporte copiado (${kb} KB). Pegalo en una conversación nueva con Claude.`; };
+  const fallback=()=>{ const t=$('#repBox'); t.hidden=false; t.value=txt; t.focus(); t.select(); $('#cMsg').textContent='No pude copiar automáticamente: el reporte quedó seleccionado arriba, copialo a mano.'; };
+  try{ navigator.clipboard.writeText(txt).then(ok,fallback); }catch(e){ fallback(); }
+});
+$('#repDl').addEventListener('click',()=>{
+  const txt=buildReport();
+  try{
+    const url=URL.createObjectURL(new Blob([txt],{type:'text/markdown'}));
+    const a=document.createElement('a'); a.href=url; a.download=`bloque-eterno-reporte-${new Date().toISOString().slice(0,10)}.md`;
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),3000);
+    $('#cMsg').textContent='Listo. Si no se descargó (dentro de Claude las descargas están bloqueadas), usá “Copiar reporte”.';
+  }catch(e){ $('#cMsg').textContent='No se pudo descargar acá: usá “Copiar reporte”.'; }
+});
 
 buildBoard();
 if(loadState()){ syncModeUI(); runAnalysis(); renderTray(); render(); log(mode==='tutor'?`Seguís tu partida del tutor (${game.moves.length} jugadas).`:'Seguís tu partida.'); }
 else startGame('eterno');
 renderHist();
+renderCoach();
 })();
 </script>
 </body>

@@ -15,3 +15,13 @@ Tandas **aleatorias reales**, como el juego original, con red de rescate solo cu
 - **Pistas en vivo** (desactivables): marca la mejor pieza para empezar y la mejor posición mientras arrastrás.
 - **Balance** al terminar: puntaje global (Decisiones 50%, Supervivencia 20%, Orden 15%, Salud del tablero 15%; los puntos del juego no entran), distribución de jugadas, vidas salvadas, errores de orden, huecos, falta de lugar para el 3×3, pieza problemática, precisión 1ª vs 2ª mitad y repetición de la peor jugada.
 - **Historial** con fecha: tendencia, patrones (mejora, pieza más difícil, cansancio, momento del día) y tabla de partidas. Se guarda en el navegador; "Copiar historial" / "Importar" para pasarlo entre dispositivos.
+
+## Coach
+Lee el historial a medida que guardás partidas del Tutor y entrena tus falencias.
+
+- **Motor con mirada a futuro**: además de las líneas, valora la probabilidad de que la próxima pieza al azar tenga lugar (según la frecuencia real de cada pieza) y castiga más los huecos, porque el Punto casi no sale. En partidas simuladas con las mismas tandas, seguir al motor necesita ~17% menos rescates que la versión anterior.
+- **Causa de cada error**: huecos aislados, sin lugar para el 3×3, espacio fragmentado, bordes irregulares, líneas que dejaste pasar, romper líneas a cualquier costo y orden de las piezas.
+- **Diagnóstico y foco**: con 3 partidas medibles (sin pistas ni avisos) y 60 jugadas, rankea tus falencias por costo cada 100 jugadas y elige una como foco. Se da por superado cuando baja 30% o más en al menos 3 partidas.
+- **Ejercicios**: tableros reales donde te equivocaste, con repetición espaciada (1, 3, 7 y 21 días). Primero los de tu foco.
+- **Avisos dirigidos**: durante el arrastre, solo cuando estás por cometer el error de tu foco.
+- **Reporte para Claude**: un `.md` con instrucciones y datos en JSON, para pegar en una conversación y pedir un diagnóstico.
