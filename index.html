@@ -120,6 +120,8 @@ tbody tr:hover{background:rgba(255,255,255,.04)}
 /* Balance (hoja superpuesta) */
 #sheetWrap{position:fixed;inset:0;z-index:30;background:rgba(5,10,35,.66);display:flex;align-items:flex-end;justify-content:center;
   padding-top:max(24px,env(safe-area-inset-top,0px))}
+/* flex-shrink:0 en los hijos: sin eso, con la hoja llena, el navegador achicaba la lista plegable y el texto de abajo se le encimaba */
+#sheet>*{flex-shrink:0}
 #sheet{background:var(--sheet);width:100%;max-width:480px;max-height:100%;overflow-y:auto;border-radius:18px 18px 0 0;
   padding:20px max(18px,env(safe-area-inset-left,0px)) calc(24px + env(safe-area-inset-bottom,0px)) max(18px,env(safe-area-inset-right,0px));
   display:flex;flex-direction:column;gap:18px;box-shadow:0 -10px 40px rgba(0,0,0,.4)}
@@ -255,14 +257,25 @@ const SHAPES = [
   {id:'I4-v', name:'Barra de 4',    col:'#e22b3a', cells:[[0,0],[1,0],[2,0],[3,0]]},
   {id:'L',    name:'L',             col:'#3d64ee', cells:[[0,0],[1,0],[2,0],[2,1]]},
   // Va al final para no cambiar el índice de color de partidas guardadas
-  {id:'R23',  name:'Rectángulo 2×3', col:'#19b9a4', cells:[[0,0],[0,1],[1,0],[1,1],[2,0],[2,1]]},
+  {id:'R23',  name:'Rectángulo vertical', col:'#19b9a4', cells:[[0,0],[0,1],[1,0],[1,1],[2,0],[2,1]]},
+  // Piezas nuevas (al final para no cambiar el color de partidas guardadas)
+  {id:'C3-tl', name:'Esquina chica ┌',  col:'#ffb21f', cells:[[0,0],[0,1],[1,0]]},
+  {id:'C3-tr', name:'Esquina chica ┐',  col:'#ff5c8a', cells:[[0,0],[0,1],[1,1]]},
+  {id:'C3-bl', name:'Esquina chica └',  col:'#45d16a', cells:[[0,0],[1,0],[1,1]]},
+  {id:'C3-br', name:'Esquina chica ┘',  col:'#3fa7f5', cells:[[0,1],[1,0],[1,1]]},
+  {id:'R32',   name:'Rectángulo horizontal', col:'#ef4f7a', cells:[[0,0],[0,1],[0,2],[1,0],[1,1],[1,2]]},
+  {id:'C5-tl', name:'Esquina grande ┌', col:'#f2416b', cells:[[0,0],[0,1],[0,2],[1,0],[2,0]]},
+  {id:'C5-tr', name:'Esquina grande ┐', col:'#ffc83a', cells:[[0,0],[0,1],[0,2],[1,2],[2,2]]},
+  {id:'C5-bl', name:'Esquina grande └', col:'#3c8cf0', cells:[[0,0],[1,0],[2,0],[2,1],[2,2]]},
+  {id:'C5-br', name:'Esquina grande ┘', col:'#38c96a', cells:[[0,2],[1,2],[2,0],[2,1],[2,2]]},
 ];
 SHAPES.forEach((s,k)=>{ s.k=k; s.h=Math.max(...s.cells.map(c=>c[0]))+1; s.w=Math.max(...s.cells.map(c=>c[1]))+1; });
 const BY_ID = Object.fromEntries(SHAPES.map(s=>[s.id,s]));
 const DOT = BY_ID['dot'], O3 = BY_ID['O3'];
 // Peso de aparición: las piezas chicas no deberían salir tanto, si no el juego es trivial
 // 1 = frecuencia normal. El Punto sale muy poco; el rectángulo 2×3 un poco más que una pieza normal.
-const WEIGHT = {'dot':0.2,'O3':0.8,'diag':0.8,'R23':1.2};
+// Las piezas que no figuran tienen frecuencia normal (1). Punto y Diagonal salen muy poco.
+const WEIGHT = {'dot':0.1,'diag':0.3,'O3':0.8,'R23':1.2};
 
 // Tablero lógico para el motor: Uint8Array(64), 0 vacío / 1 ocupado
 function fits(o,s,r,c){
