@@ -252,6 +252,7 @@ const SHAPES = [
   {id:'O2',   name:'Cuadrado 2×2',  col:'#f2552c', cells:[[0,0],[0,1],[1,0],[1,1]]},
   {id:'dot',  name:'Punto',         col:'#ef3b36', cells:[[0,0]]},
   {id:'O3',   name:'Cuadrado 3×3',  col:'#ffc21a', cells:[[0,0],[0,1],[0,2],[1,0],[1,1],[1,2],[2,0],[2,1],[2,2]]},
+  // Fuera del reparto (peso 0); queda en la lista solo para que se vean bien las partidas guardadas
   {id:'T',    name:'T',             col:'#a052e8', cells:[[0,1],[1,0],[1,1],[1,2]]},
   {id:'Z-v',  name:'Z vertical',    col:'#3a6ff0', cells:[[0,0],[1,0],[1,1],[2,1]]},
   {id:'I4-v', name:'Barra de 4',    col:'#e22b3a', cells:[[0,0],[1,0],[2,0],[3,0]]},
@@ -268,21 +269,27 @@ const SHAPES = [
   {id:'C5-tr', name:'Esquina grande ┐', col:'#ffc83a', cells:[[0,0],[0,1],[0,2],[1,2],[2,2]]},
   {id:'C5-bl', name:'Esquina grande └', col:'#3c8cf0', cells:[[0,0],[1,0],[2,0],[2,1],[2,2]]},
   {id:'C5-br', name:'Esquina grande ┘', col:'#38c96a', cells:[[0,2],[1,2],[2,0],[2,1],[2,2]]},
+  {id:'T-r',   name:'T derecha ├',   col:'#a052e8', cells:[[0,0],[1,0],[1,1],[2,0]]},
+  {id:'T-l',   name:'T izquierda ┤', col:'#b45cf0', cells:[[0,1],[1,0],[1,1],[2,1]]},
 ];
 SHAPES.forEach((s,k)=>{ s.k=k; s.h=Math.max(...s.cells.map(c=>c[0]))+1; s.w=Math.max(...s.cells.map(c=>c[1]))+1; });
 const BY_ID = Object.fromEntries(SHAPES.map(s=>[s.id,s]));
+const wOf = s => WEIGHT[s.id] ?? 1;   // ?? y no ||: un peso 0 tiene que valer 0
 const DOT = BY_ID['dot'], O3 = BY_ID['O3'];
 // Peso de aparición: las piezas chicas no deberían salir tanto, si no el juego es trivial
 // 1 = frecuencia normal. El Punto sale muy poco; el rectángulo 2×3 un poco más que una pieza normal.
 // Las piezas que no figuran tienen frecuencia normal (1). Punto y Diagonal salen muy poco.
-const WEIGHT = {'dot':0.1,'diag':0.3,'O3':0.8,'R23':1.2};
+const WEIGHT = {'dot':0.1,'diag':0.3,'O3':0.8,'R23':1.2,'T':0};
 // Familias: todas las orientaciones de una forma cuentan como UNA pieza normal.
 // El peso de la familia se reparte en partes iguales, así cada orientación sale al azar dentro de ella.
 const FAMILIES = {
   'Esquina chica':  {w:1, ids:['C3-tl','C3-tr','C3-bl','C3-br']},
   'Esquina grande': {w:1, ids:['C5-tl','C5-tr','C5-bl','C5-br']},
+  'T de costado':   {w:1, ids:['T-r','T-l']},
 };
 for(const f of Object.values(FAMILIES)) for(const id of f.ids) WEIGHT[id]=f.w/f.ids.length;
+// Piezas que pueden salir (reparto, rescates y tandas de emergencia)
+const ACTIVE = SHAPES.filter(s=>wOf(s)>0);
 
 // Tablero lógico para el motor: Uint8Array(64), 0 vacío / 1 ocupado
 function fits(o,s,r,c){
@@ -419,8 +426,8 @@ const MIN_MOVES = 10;   // partidas más cortas no se guardan: muy poca muestra 
 
 function occ(b){ const o=new Uint8Array(64); for(let i=0;i<64;i++) o[i]=b[i]==null?0:1; return o; }
 function pickWeighted(){
-  const tot=SHAPES.reduce((a,s)=>a+(WEIGHT[s.id]||1),0); let x=Math.random()*tot;
-  for(const s of SHAPES){ x-=(WEIGHT[s.id]||1); if(x<=0) return s; } return SHAPES[0];
+  const tot=ACTIVE.reduce((a,s)=>a+wOf(s),0); let x=Math.random()*tot;
+  for(const s of ACTIVE){ x-=wOf(s); if(x<=0) return s; } return ACTIVE[0];
 }
 // Calidad de la mejor jugada inmediata de una pieza (lo usa el modo Eterno para elegir la "pieza justa")
 function fitQuality(o,s){
@@ -443,7 +450,7 @@ function generateSet(){
   for(let t=0;t<120 && cands.length<10;t++){ const set=[pickWeighted(),pickWeighted(),pickWeighted()]; if(solvable(o,set)) cands.push(set); }
   if(!cands.length){
     const set=[];
-    for(let k=0;k<3;k++){ const opts=[...SHAPES].sort((a,b)=>fitQuality(o,b)-fitQuality(o,a)); set.push(opts.find(s=>solvable(o,[...set,s]))||DOT); }
+    for(let k=0;k<3;k++){ const opts=[...ACTIVE].sort((a,b)=>fitQuality(o,b)-fitQuality(o,a)); set.push(opts.find(s=>solvable(o,[...set,s]))||DOT); }
     return set;
   }
   let pick=cands[0], bq=-1;
@@ -452,7 +459,7 @@ function generateSet(){
 }
 // Cambia piezas de la bandeja para que vuelva a haber salida (con la menor intervención posible)
 function swapForExit(idx){
-  const o=occ(board), order=[...SHAPES].sort((a,b)=>fitQuality(o,b)-fitQuality(o,a));
+  const o=occ(board), order=[...ACTIVE].sort((a,b)=>fitQuality(o,b)-fitQuality(o,a));
   for(const i of idx) for(const s of order){
     if(solvable(o, idx.map(j=>j===i?s:tray[j]))){ tray[i]=s; return [i]; }
   }
