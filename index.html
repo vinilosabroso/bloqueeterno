@@ -276,6 +276,13 @@ const DOT = BY_ID['dot'], O3 = BY_ID['O3'];
 // 1 = frecuencia normal. El Punto sale muy poco; el rectángulo 2×3 un poco más que una pieza normal.
 // Las piezas que no figuran tienen frecuencia normal (1). Punto y Diagonal salen muy poco.
 const WEIGHT = {'dot':0.1,'diag':0.3,'O3':0.8,'R23':1.2};
+// Familias: todas las orientaciones de una forma cuentan como UNA pieza normal.
+// El peso de la familia se reparte en partes iguales, así cada orientación sale al azar dentro de ella.
+const FAMILIES = {
+  'Esquina chica':  {w:1, ids:['C3-tl','C3-tr','C3-bl','C3-br']},
+  'Esquina grande': {w:1, ids:['C5-tl','C5-tr','C5-bl','C5-br']},
+};
+for(const f of Object.values(FAMILIES)) for(const id of f.ids) WEIGHT[id]=f.w/f.ids.length;
 
 // Tablero lógico para el motor: Uint8Array(64), 0 vacío / 1 ocupado
 function fits(o,s,r,c){
