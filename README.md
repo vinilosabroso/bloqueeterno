@@ -25,3 +25,5 @@ Lee el historial a medida que guardás partidas del Tutor y entrena tus falencia
 - **Ejercicios**: tableros reales donde te equivocaste, con repetición espaciada (1, 3, 7 y 21 días). Primero los de tu foco.
 - **Avisos dirigidos**: durante el arrastre, solo cuando estás por cometer el error de tu foco.
 - **Reporte para Claude**: un `.md` con instrucciones y datos en JSON, para pegar en una conversación y pedir un diagnóstico.
+- **Puntos por vida**: puntos sumados entre rescates en cada partida del Tutor (la última vida termina cuando cerrás la partida, no por perder).
+- **Errores sin causa clara**: registro persistente (no se borra con el historial, hasta 400 casos) con tablero, bandeja, tu jugada, la sugerida, el mejor final de la bandeja en cada caso, métricas comparadas y qué pasó en las jugadas siguientes. Se exporta con su propio prompt para que Claude proponga reglas nuevas o detecte errores del motor.

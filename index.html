@@ -245,6 +245,7 @@ details.mv>summary:focus-visible{outline:2px solid var(--gold);outline-offset:2p
     </div>
     <label class="tg" for="warn"><input type="checkbox" id="warn"> Avisos del coach durante la partida (solo sobre tu foco)</label>
     <div class="tools"><button type="button" id="repCopy">Copiar reporte para Claude</button><button type="button" id="repDl" class="ghost">Descargar reporte (.md)</button></div>
+    <div class="tools"><button type="button" id="uncCopy">Copiar errores sin causa clara</button><button type="button" id="uncDel" class="ghost">Vaciar ese registro</button></div>
     <textarea id="repBox" hidden aria-label="Reporte para Claude"></textarea>
     <p class="foot" id="cMsg"></p>
   </section>
@@ -492,7 +493,7 @@ function causes(before, s, r, c, bs, bpos, orderErr){
 // Estado
 // board[i] = índice de pieza (para el color) o null
 // ======================================================================
-const LS = {state:'be-state-v2', hist:'be-hist-v1', best:'be-best', coach:'be-coach', drills:'be-drills', warn:'be-warn', live:'be-live'};
+const LS = {state:'be-state-v2', hist:'be-hist-v1', best:'be-best', unclear:'be-unclear', coach:'be-coach', drills:'be-drills', warn:'be-warn', live:'be-live'};
 const store = {
   get(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } },
   set(k,v){ try{ localStorage.setItem(k,v); return true; }catch(e){ return false; } },
@@ -563,6 +564,8 @@ function checkRescue(){
     if(idx.some(i=>anyFit(o,tray[i]))) return;
     const ch=swapForExit(idx); saves++; rescued=new Set(ch);
     game.saves=saves;
+    // Puntos por vida: lo que sumaste desde el último rescate (o el inicio) hasta este
+    game.lives=game.lives||[]; game.lives.push(score-(game.mark||0)); game.mark=score;
     log('Vida salvada: acá el juego real terminaba. Te cambié piezas para que sigas.');
   }
 }
@@ -776,7 +779,7 @@ function encodeBoard(){ return board.map(v=>v==null?'.':String.fromCharCode(97+v
 function decodeBoard(str){ return [...str].map(ch=>ch==='.'?null:ch.charCodeAt(0)-97); }
 
 // ---------- Partida y persistencia ----------
-function freshGame(){ return {start:new Date().toISOString(), moves:[], worst:null, saves:0}; }
+function freshGame(){ return {start:new Date().toISOString(), moves:[], worst:null, saves:0, lives:[], mark:0}; }
 function startGame(m){
   mode=m||mode;
   board=new Array(64).fill(null); score=0; lines=0; sets=0; rescues=0; saves=0; game=freshGame(); flash=null;
@@ -828,8 +831,10 @@ function summarize(g, pts, lns, sts){
   let worstPiece=null; for(const [id,v] of Object.entries(pc)) if(v.n>=3 && (!worstPiece || v.loss/v.n>worstPiece.avg)) worstPiece={id,avg:v.loss/v.n,n:v.n,bad:v.bad};
   const hint=+(100*m.filter(x=>x.h).length/n).toFixed(0);   // % de jugadas hechas con pistas en vivo
   const aid=+(100*m.filter(x=>x.cw).length/n).toFixed(0);    // % con avisos del coach
+  // Vidas: tramos de puntos entre rescates; el último tramo sigue "en curso" (terminaste vos, no el juego)
+  const lives=[...(g.lives||[]), pts-(g.mark||0)], ppl=Math.round(pts/lives.length);
   const cz={}; m.forEach(x=>(x.tg||[]).forEach(t=>cz[t]=(cz[t]||0)+1));
-  return {id:g.start, cv:3, date:new Date().toISOString(), start:g.start, n, hint, aid, cz, points:pts, lines:lns, sets:sts, saves:g.saves,
+  return {id:g.start, cv:3, date:new Date().toISOString(), start:g.start, n, hint, aid, cz, lives, ppl, points:pts, lines:lns, sets:sts, saves:g.saves,
     global:+global.toFixed(1), dec:+dec.toFixed(1), ord:+ord.toFixed(1), sup:+sup.toFixed(1), sal:+sal.toFixed(1),
     dec1:+dec1.toFixed(1), dec2:+dec2.toFixed(1), cats, ordErr, holes:holesC, no3, worstPiece, pieces:pc, worst:g.worst,
     log:m.map(x=>({b:x.b,pos:x.pos,bp:x.bp,bpos:x.bpos,p:x.p,cat:x.cat,loss:x.loss,ord:x.ord,pts:x.pts,ln:x.ln,h:x.h,sw:x.sw,t:x.t,tg:x.tg,cw:x.cw}))};
@@ -845,7 +850,7 @@ function finishGame(){
   showBalance(s, true);
   startGame('tutor');
 }
-function saveHist(){ if(!store.set(LS.hist, JSON.stringify(hist))) $('#hMsg').textContent='No se pudo guardar el historial en este navegador (almacenamiento lleno o bloqueado).'; renderHist(); renderCoach(); }
+function saveHist(){ hist.forEach(logUnclear); if(!store.set(LS.hist, JSON.stringify(hist))) $('#hMsg').textContent='No se pudo guardar el historial en este navegador (almacenamiento lleno o bloqueado).'; renderHist(); renderCoach(); }
 
 const dateTxt=iso=>{ const d=new Date(iso); return d.toLocaleDateString('es-AR',{day:'numeric',month:'short',year:'numeric'})+' · '+d.toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'}); };
 const nameOf=id=>(BY_ID[id]||{name:id}).name;
@@ -902,6 +907,7 @@ function showBalance(s, fresh){
     <div><h3>Jugadas</h3><div class="dist" style="margin-top:8px">${['optima','buena','imprecisa','error'].map(seg).join('')}</div><div class="dist-l">${legend}</div></div>
     <div class="kpis">
       <div class="kpi"><b>${s.saves}</b><span>Partidas que habrías perdido (vidas salvadas)</span></div>
+      ${s.lives?`<div class="kpi wide"><b>${s.ppl} pts por vida</b><span>${s.lives.length===1?'Una sola vida: no hubo rescates':`Por vida: ${s.lives.map((v,k)=>k===s.lives.length-1?`${v} (la última, sin perder)`:v).join(' · ')}`}</span></div>`:''}
       <div class="kpi"><b>${s.ordErr}</b><span>Errores de orden</span></div>
       <div class="kpi"><b>${s.holes}</b><span>Huecos aislados que dejaste</span></div>
       <div class="kpi"><b>${s.no3}</b><span>Jugadas que te dejaron sin lugar para el 3×3</span></div>
@@ -1043,9 +1049,9 @@ function tableHTML(H){
   const col=v=>v>=80?'var(--c-opt)':v>=65?'var(--c-good)':v>=50?'var(--c-imp)':'var(--c-err)';
   const rows=H.map(h=>{ const d=new Date(h.date);
     return `<tr tabindex="0" data-id="${h.id}"><td>${d.toLocaleDateString('es-AR',{day:'numeric',month:'short'})} ${d.toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'})}${hintKind(h)==='hinted'?`<span class="tag hinted">pistas ${h.hint}%</span>`:hintKind(h)==='unk'?'<span class="tag unk">sin dato</span>':''}${h.aid?`<span class="tag hinted">avisos ${h.aid}%</span>`:''}</td>
-      <td><span class="gpill" style="color:${col(h.global)}">${fmt(h.global)}</span></td><td>${fmt(h.dec)}</td><td>${h.points}</td><td>${h.saves}</td><td>${h.n}</td></tr>`; }).join('');
+      <td><span class="gpill" style="color:${col(h.global)}">${fmt(h.global)}</span></td><td>${fmt(h.dec)}</td><td>${h.points}</td><td>${h.ppl??'–'}</td><td>${h.saves}</td><td>${h.n}</td></tr>`; }).join('');
   return `<div><h3>Partidas · tocá una para ver su balance</h3><div class="tbl"><table>
-    <thead><tr><th>Fecha</th><th>Global</th><th>Decis.</th><th>Puntos</th><th>Vidas</th><th>Jug.</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+    <thead><tr><th>Fecha</th><th>Global</th><th>Decis.</th><th>Puntos</th><th>Pts/vida</th><th>Rescates</th><th>Jug.</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
 }
 // Copiar / importar / borrar (el historial vive en este navegador: así se pasa de un dispositivo a otro)
 $('#hCopy').addEventListener('click',()=>{
@@ -1142,6 +1148,7 @@ function renderCoach(){
   const pend=dueDrills().length;
   $('#drillGo').textContent = pend ? `Ejercicios con tus errores (${pend})` : 'Ejercicios con tus errores';
   $('#drillGo').disabled = !pend;
+  $('#uncCopy').textContent = `Copiar errores sin causa clara (${unclear.length})`;
   $('#cNext').hidden = !st.ready;
   $('#warn').disabled = !st.ready;
   $('#cMeta').textContent = st.E.length ? `${st.E.length} ${st.E.length===1?'partida medible':'partidas medibles'}` : '';
@@ -1315,7 +1322,7 @@ function buildReport(){
   const rows=str=>{ const b=decodeBoard(str); return [...Array(8)].map((_,r)=>b.slice(r*8,r*8+8).map(v=>v==null?'.':'#').join('')); };
   const r1=v=>v==null?null:+(+v).toFixed(1);
   const partidas=[...hist].sort(byDate).map(h=>({fecha:h.date, jugadas:h.n, medible:eligible(h), pistas_pct:h.hint??null, avisos_pct:h.aid||0,
-    global:h.global, decisiones:h.dec, orden:h.ord, supervivencia:h.sup, salud_tablero:h.sal, puntos:h.points, lineas:h.lines, vidas_salvadas:h.saves,
+    global:h.global, decisiones:h.dec, orden:h.ord, supervivencia:h.sup, salud_tablero:h.sal, puntos:h.points, lineas:h.lines, vidas_salvadas:h.saves, puntos_por_vida:h.ppl??null, puntos_de_cada_vida:h.lives||null,
     calificaciones:h.cats, causas:h.cz ? Object.fromEntries(Object.entries(h.cz).map(([k,v])=>[CAUSE[k].t,v])) : null,
     precision_1a_mitad:h.dec1, precision_2a_mitad:h.dec2,
     pieza_problematica:h.worstPiece?{pieza:nameOf(h.worstPiece.id), perdida_promedio:r1(h.worstPiece.avg), usos:h.worstPiece.n}:null}));
@@ -1331,6 +1338,7 @@ function buildReport(){
       calificaciones_por_perdida:{Óptima:`≤ ${CUT.optima}`, Buena:`≤ ${CUT.buena}`, Imprecisa:`≤ ${CUT.imprecisa}`, Error:`> ${CUT.imprecisa}`},
       puntaje_global:'0 a 100: Decisiones 50% (precisión promedio), Supervivencia 20% (vidas salvadas cada 30 jugadas), Orden 15%, Salud del tablero 15%. Los puntos del juego no entran.',
       vida_salvada:'momento en que el juego real habría terminado (ninguna pieza entraba) y se cambiaron piezas para seguir',
+      puntos_por_vida:'puntos de la partida divididos por la cantidad de vidas (rescates + 1); la última vida no terminó en derrota sino porque el jugador cerró la partida',
       causas:Object.fromEntries(Object.values(CAUSE).map(c=>[c.t, c.tip])),
       costo_cada_100:'suma de pérdidas (tope 32 por jugada) atribuidas a una causa, cada 100 jugadas'
     },
@@ -1359,6 +1367,98 @@ $('#repDl').addEventListener('click',()=>{
     $('#cMsg').textContent='Listo. Si no se descargó (dentro de Claude las descargas están bloqueadas), usá “Copiar reporte”.';
   }catch(e){ $('#cMsg').textContent='No se pudo descargar acá: usá “Copiar reporte”.'; }
 });
+
+// ---------- Registro de errores sin causa clara (persistente: no se borra al borrar el historial) ----------
+// Guarda lo mínimo; las métricas se calculan al exportar, así se pueden recalcular con un motor nuevo.
+let unclear = readJSON(LS.unclear, []);
+const UNCLEAR_MAX = 400;
+function logUnclear(g){
+  if(!(g.cv>=3) || !g.log) return;
+  const have=new Set(unclear.map(u=>u.id)); let added=false;
+  g.log.forEach((x,k)=>{
+    if(x.sw || (x.tg&&x.tg.length) || x.loss<=CUT.buena || !x.t) return;
+    const id=g.id+'#'+k; if(have.has(id)) return;
+    // Consecuencia: cómo siguió la partida en las 3 jugadas siguientes y si hubo rescate en las 6 siguientes
+    const nx=g.log.slice(k+1,k+4), n6=g.log.slice(k+1,k+7);
+    unclear.push({id, date:g.date, med:eligible(g)?1:0, b:x.b, t:x.t, p:x.p, pos:x.pos, bp:x.bp, bpos:x.bpos, loss:x.loss, cat:x.cat, h:x.h||0,
+      next:{perdidas:nx.map(y=>y.loss), lineas:nx.reduce((a,y)=>a+y.ln,0), rescate_en_6:n6.some(y=>y.sw)?1:0}});
+    added=true;
+  });
+  if(added){ if(unclear.length>UNCLEAR_MAX) unclear=unclear.slice(-UNCLEAR_MAX); store.set(LS.unclear, JSON.stringify(unclear)); }
+}
+function unclearCount(){ return unclear.length; }
+const PROMPT_UNCLEAR=`Sos analista del motor de evaluación de Bloque Eterno, un puzzle de bloques 8×8 estilo Block Blast (piezas sin rotación, una bandeja de 3, cada fila o columna completa se borra).
+
+El motor compara cada jugada con la mejor posible usando solo lo que el jugador veía: el tablero y su bandeja. Cuando una jugada pierde bastante contra la sugerida, el juego intenta nombrar la causa con estas reglas, que comparan el tablero que dejó el jugador contra el que deja la sugerida:
+- Huecos aislados: el jugador dejó más celdas vacías encerradas.
+- Sin lugar para el 3×3: el jugador se quedó sin lugar para el 3×3 y la sugerida no.
+- Espacio fragmentado: la probabilidad de que la próxima pieza al azar entre baja más de 0,10.
+- Bordes irregulares: 4 o más cambios lleno/vacío entre vecinos que la sugerida.
+- Líneas que dejaste pasar / Romper líneas a cualquier costo: rompió menos / más líneas que la sugerida.
+- Orden de las piezas: el problema fue qué pieza jugó primero.
+
+Importante: el motor no juzga la jugada aislada. Calcula el mejor final posible colocando también el resto de la bandeja; por eso cada caso trae "resto_de_la_bandeja" con la mejor continuación tras la jugada del jugador y la del motor tras la sugerida, con sus tableros y métricas finales. Muchas diferencias solo se ven ahí.
+
+Estos son los errores que NO encajaron en ninguna regla. Para cada uno tenés el tablero antes, cómo quedó con la jugada del jugador y con la sugerida (Y = celdas de la pieza del jugador, S = de la sugerida, # = ocupado, . = vacío; filas de arriba hacia abajo, posiciones fila y columna desde 0), métricas de ambos resultados y qué pasó en las jugadas siguientes.
+
+Qué hacer
+1. Agrupá los casos en patrones. Por cada patrón: cuántos casos, cuáles (por id) y qué tienen en común.
+2. Por cada patrón, proponé una regla nueva que se pueda calcular con el tablero (por ejemplo, conteos de celdas, distancias a bordes, tamaño de regiones vacías, lugar para piezas concretas), con un umbral concreto, un nombre corto y un consejo de una línea para el jugador.
+3. Señalá los casos donde creas que el motor se equivoca y la jugada del jugador era razonable, y explicá por qué. Usá "en_que_desemboco" como evidencia: si la jugada "mala" no trajo consecuencias, puede ser un falso error.
+4. Decí qué casos no podés explicar con los datos disponibles y qué dato extra ayudaría.
+
+Sé concreto y no inventes datos. Si la muestra es chica, decilo.`;
+// Mejor forma de colocar el resto de la bandeja (misma búsqueda que el motor, pero devolviendo las jugadas)
+function seqPlan(o, pieces){
+  if(!pieces.length) return {val:health(o), moves:[], o, lines:0};
+  const cands=[], seen=new Set();
+  pieces.forEach((s,i)=>{ if(seen.has(s.id)) return; seen.add(s.id);
+    const rest=pieces.filter((_,j)=>j!==i);
+    for(let r=0;r<=N-s.h;r++) for(let c=0;c<=N-s.w;c++){ if(!fits(o,s,r,c)) continue;
+      const p=placeO(o,s,r,c); cands.push({p, s, r, c, rest, q:p.n*LW+health(p.o)}); } });
+  if(!cands.length) return {val:health(o)-DEAD*pieces.length, moves:pieces.map(s=>({pieza:s.name, sin_lugar:true})), o, lines:0};
+  cands.sort((a,b)=>b.q-a.q);
+  let best=null;
+  for(const x of cands.slice(0,BEAM)){ const sub=seqPlan(x.p.o, x.rest), v=x.p.n*LW+sub.val;
+    if(!best || v>best.val) best={val:v, moves:[{pieza:x.s.name, fila:x.r, col:x.c, lineas:x.p.n}, ...sub.moves], o:sub.o, lines:x.p.n+sub.lines}; }
+  return best;
+}
+function buildUnclearReport(){
+  const rows=(b,mark)=>[...Array(8)].map((_,r)=>[...Array(8)].map((_,c)=>{ const i=r*8+c; return mark&&mark.has(i)?mark.ch:(b[i]?'#':'.'); }).join(''));
+  const feat=(o,n)=>({lineas_rotas:n, huecos_aislados:holes(o), prob_proxima_entra:+pFit(o).toFixed(2), irregularidad:rough(o), celdas_libres:o.reduce((a,v)=>a+(v?0:1),0), lugar_3x3:anyFit(o,O3)});
+  const casos=unclear.map(u=>{
+    const before=occ(decodeBoard(u.b)), s=BY_ID[u.p], bs=BY_ID[u.bp];
+    const you=placeO(before,s,...u.pos), sug=placeO(before,bs,...u.bpos);
+    const my=new Set(s.cells.map(([a,b])=>(u.pos[0]+a)*8+u.pos[1]+b)); my.ch='Y';
+    const su=new Set(bs.cells.map(([a,b])=>(u.bpos[0]+a)*8+u.bpos[1]+b)); su.ch='S';
+    return {id:u.id, fecha:u.date, medible:!!u.med, con_pista:!!u.h, perdida:u.loss, calificacion:CAT[u.cat].t,
+      bandeja:u.t.map(nameOf), pieza_jugada:nameOf(u.p), tu_jugada:{fila:u.pos[0],col:u.pos[1]}, sugerida:{pieza:nameOf(u.bp),fila:u.bpos[0],col:u.bpos[1]},
+      tablero_antes:rows(before), con_tu_jugada:rows(before,my), con_la_sugerida:rows(before,su),
+      despues_tu_jugada:rows(you.o), despues_sugerida:rows(sug.o),
+      metricas_tu_resultado:feat(you.o,you.n), metricas_sugerida:feat(sug.o,sug.n),
+      // El motor juzga con el resto de la bandeja ya colocado: este es el mejor final posible en cada caso
+      resto_de_la_bandeja: (()=>{ const rm=(arr,id)=>{ const k=arr.indexOf(id); return arr.filter((_,j)=>j!==k); };
+        const a=seqPlan(you.o, rm(u.t,u.p).map(id=>BY_ID[id]||DOT)), b=seqPlan(sug.o, rm(u.t,u.bp).map(id=>BY_ID[id]||DOT));
+        return {tras_tu_jugada:{mejor_continuacion:a.moves, tablero_final:rows(a.o), metricas_final:feat(a.o,you.n+a.lines)},
+                tras_la_sugerida:{continuacion_del_motor:b.moves, tablero_final:rows(b.o), metricas_final:feat(b.o,sug.n+b.lines)}}; })(),
+      en_que_desemboco:{perdidas_3_siguientes:u.next.perdidas, lineas_3_siguientes:u.next.lineas, hubo_rescate_en_6_siguientes:!!u.next.rescate_en_6}};
+  });
+  return `# Bloque Eterno · errores sin causa clara\n\nPegá este archivo completo en una conversación con Claude.\n\n## Instrucciones para Claude\n\n${PROMPT_UNCLEAR}\n\n## Datos\n\n\`\`\`json\n${JSON.stringify({generado:new Date().toISOString(), casos:casos.length, casos_detalle:casos},null,1)}\n\`\`\`\n`;
+}
+$('#uncCopy').addEventListener('click',()=>{
+  if(!unclear.length){ $('#cMsg').textContent='Todavía no hay errores sin causa clara registrados.'; return; }
+  const txt=buildUnclearReport(), kb=(txt.length/1024).toFixed(0);
+  const ok=()=>{ $('#repBox').hidden=true; $('#cMsg').textContent=`Copiados ${unclear.length} errores sin causa clara (${kb} KB). Pegalos en una conversación nueva con Claude.`; };
+  const fallback=()=>{ const t=$('#repBox'); t.hidden=false; t.value=txt; t.focus(); t.select(); $('#cMsg').textContent='No pude copiar automáticamente: el texto quedó seleccionado arriba, copialo a mano.'; };
+  try{ navigator.clipboard.writeText(txt).then(ok,fallback); }catch(e){ fallback(); }
+});
+let uncArm=false;
+$('#uncDel').addEventListener('click',()=>{
+  if(!uncArm){ uncArm=true; $('#uncDel').textContent='Tocá de nuevo para vaciar'; setTimeout(()=>{ uncArm=false; $('#uncDel').textContent='Vaciar ese registro'; },4000); return; }
+  unclear=[]; store.set(LS.unclear,'[]'); uncArm=false; $('#uncDel').textContent='Vaciar ese registro'; renderCoach();
+  $('#cMsg').textContent='Registro de errores sin causa clara vaciado.';
+});
+hist.forEach(logUnclear);   // completa el registro con las partidas que ya tenías
 
 buildBoard();
 if(loadState()){ syncModeUI(); runAnalysis(); renderTray(); render(); log(mode==='tutor'?`Seguís tu partida del tutor (${game.moves.length} jugadas).`:'Seguís tu partida.'); }
