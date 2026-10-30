@@ -84,7 +84,14 @@ select,button{cursor:pointer}
 button.primary{background:var(--gold);color:#3a2600;border-color:var(--gold);font-weight:800}
 button.ghost{background:transparent}
 button:focus-visible,select:focus-visible,input:focus-visible,textarea:focus-visible,tr:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
-.seg{display:inline-flex;background:var(--board);border-radius:10px;padding:3px;gap:3px}
+.seg{display:inline-flex;flex-wrap:wrap;background:var(--board);border-radius:10px;padding:3px;gap:3px}
+.duel{display:grid;grid-template-columns:minmax(0,1fr) 112px;gap:12px;align-items:center;background:rgba(0,0,0,.18);border-radius:12px;padding:10px 12px}
+.duel .mb{width:112px}
+.duelside{display:flex;flex-direction:column;gap:3px;min-width:0}
+.duelside .fl{font-size:.66rem;text-transform:uppercase;letter-spacing:1.3px;color:var(--muted);font-weight:800}
+.duelside b{font-family:var(--display);font-weight:400;font-size:1.7rem;line-height:1;font-variant-numeric:tabular-nums}
+.duelside #duelDiff{font-weight:800;font-size:.85rem}
+.lives{color:var(--c-err);letter-spacing:2px}
 .seg button{border:0;background:transparent;color:var(--muted);font-weight:800;padding:6px 12px;border-radius:8px}
 .seg button[aria-pressed="true"]{background:var(--bg2);color:var(--fg)}
 .log{font-size:.78rem;color:var(--muted);min-height:1.2em}
@@ -212,17 +219,33 @@ details.mv>summary:focus-visible{outline:2px solid var(--gold);outline-offset:2p
 
   <div id="board"><div id="combo"></div><div id="fb"></div></div>
   <div class="tray" id="tray"></div>
+  <div class="duel" id="duelBox" hidden>
+    <div class="duelside"><span class="fl">Motor · mismas piezas</span><b id="engScore">0</b><span id="duelDiff"></span><span class="foot" id="engInfo"></span></div>
+    <div class="mb" id="engBoard" aria-label="Tablero del motor"></div>
+  </div>
 
   <div class="panel">
     <div class="row" id="rowMain">
       <div class="seg" role="group" aria-label="Modo de juego">
-        <button type="button" id="mEterno" aria-pressed="true">Eterno</button>
-        <button type="button" id="mTutor" aria-pressed="false">Tutor</button>
+        <button type="button" data-mode="eterno" aria-pressed="true">Eterno</button>
+        <button type="button" data-mode="tutor" aria-pressed="false">Tutor</button>
+        <button type="button" data-mode="duelo" aria-pressed="false">Duelo</button>
+        <button type="button" data-mode="survival" aria-pressed="false">Survival</button>
+        <button type="button" data-mode="puzzle" aria-pressed="false">Puzzles</button>
       </div>
       <button id="reset" type="button" class="ghost">Nueva partida</button>
     </div>
     <div class="row" id="rowEterno">
       <label class="tg" for="hints"><input type="checkbox" id="hints"> Marcar dónde encaja</label>
+      <label class="tg" for="album">Sesión <select id="album"><option value="0">libre</option><option value="30">30 min</option><option value="45">45 min</option><option value="60">60 min</option></select></label>
+      <span class="foot" id="albumLeft"></span>
+    </div>
+    <div class="row" id="rowDuel" hidden>
+      <div class="seg" role="group" aria-label="Tipo de duelo"><button type="button" id="dDaily" aria-pressed="true">Desafío del día</button><button type="button" id="dFree" aria-pressed="false">Duelo libre</button></div>
+      <span class="foot" id="duelInfo"></span>
+    </div>
+    <div class="row" id="rowPuzzle" hidden>
+      <div class="tools"><button type="button" id="pzRetry">Reintentar</button><button type="button" id="pzHint" class="ghost">Pista</button><button type="button" id="pzSkip" class="ghost">Otro puzzle</button></div>
     </div>
     <div class="row" id="rowTutor" hidden>
       <label class="tg" for="live"><input type="checkbox" id="live" checked> Pistas en vivo</label>
@@ -523,6 +546,7 @@ const store = {
   del(k){ try{ localStorage.removeItem(k); }catch(e){} }
 };
 let mode='eterno', board, tray, used, score, lines, sets, rescues, saves, game, analysis=null;
+let streak=0, bestStreak=0, colorLines=0, lives=3, X={};   // racha, color, vidas y estado propio de cada modo
 let best = +store.get(LS.best) || 0;
 let hist = []; try{ hist = JSON.parse(store.get(LS.hist)||'[]'); if(!Array.isArray(hist)) hist=[]; }catch(e){ hist=[]; }
 const MIN_MOVES = 10;   // partidas más cortas no se guardan: muy poca muestra para medir algo
@@ -552,7 +576,8 @@ function fitQuality(o,s){
 // ---------- Reparto de piezas ----------
 function generateSet(){
   const o=occ(board);
-  if(mode==='tutor') return [pickWeighted(),pickWeighted(),pickWeighted()];  // tandas reales, como el juego original
+  if(mode==='duelo') return duelNextSet();
+  if(mode==='tutor' || mode==='survival') return [pickWeighted(),pickWeighted(),pickWeighted()];  // tandas reales, como el juego original
   const cands=[];
   for(let t=0;t<120 && cands.length<10;t++){ const set=[pickWeighted(),pickWeighted(),pickWeighted()]; if(solvable(o,set)) cands.push(set); }
   if(!cands.length){
@@ -576,7 +601,8 @@ function swapForExit(idx){
 let rescued=new Set();
 function checkRescue(){
   const o=occ(board), idx=[0,1,2].filter(i=>!used[i]);
-  if(!idx.length) return;
+  if(!idx.length || mode==='puzzle') return;
+  if(mode==='survival' || mode==='duelo'){ if(!idx.some(i=>anyFit(o,tray[i]))) modeStuck(idx); return; }
   if(mode==='eterno'){
     // Eterno: interviene apenas el resto de la tanda deja de tener salida completa
     if(solvable(o, idx.map(i=>tray[i]))) return;
@@ -619,8 +645,9 @@ function render(preview){
     if(preview && preview.pre && preview.pre.has(i)){ e.classList.add('pre'); e.style.setProperty('--pcol',preview.col); }
     else e.style.removeProperty('--pcol');
   }
-  $('#score').textContent=score; $('#best').textContent=best;
+  $('#score').textContent = mode==='puzzle' ? X.level : score; $('#best').textContent = mode==='puzzle' ? pz.solved : best;
   if(drill){ $('#stats').innerHTML=`<span>Ejercicio <b>${Math.min(drill.idx+1,drill.queue.length)} de ${drill.queue.length}</b></span><span>Correctos <b>${drill.ok}</b></span>`; return; }
+  if(mode!=='tutor'){ $('#stats').innerHTML=modeStats(); if(mode==='duelo') renderDuel(); return; }
   const st=[`<span>Tandas <b>${sets}</b></span>`, `<span>Líneas <b>${lines}</b></span>`];
   if(mode==='eterno') st.push(`<span>Rescates <b>${rescues}</b></span>`);
   else {
@@ -645,7 +672,7 @@ function renderTray(){
     const slot=document.createElement('div'); slot.className='slot'; slot.dataset.i=i;
     if(!used[i]){
       let badge='';
-      if(rescued.has(i)){ slot.classList.add('rescued'); badge=mode==='tutor'?'cambiada':'rescate'; }
+      if(rescued.has(i)){ slot.classList.add('rescued'); badge=mode==='tutor'?'cambiada':mode==='duelo'?'vida perdida':'rescate'; }
       else if(i===firstSlot){ slot.classList.add('first'); badge='mejor 1ª'; }
       if(badge){ const b=document.createElement('span'); b.className='badge'; b.textContent=badge; slot.appendChild(b); }
       const m=document.createElement('div'); m.className='mini';
@@ -673,7 +700,7 @@ let drag=null;
 function cellSize(){ const r=boardEl.getBoundingClientRect(); return (r.width-12-3*7)/8; }
 function startDrag(e,i){
   e.preventDefault();
-  if(drag || (drill && drill.answered)) return;
+  if(drag || (drill && drill.answered) || (!drill && X.over)) return;
   const s=tray[i], cs=cellSize();
   dragEl.innerHTML=''; dragEl.style.gridTemplateColumns=`repeat(${s.w},${cs}px)`; dragEl.style.gridTemplateRows=`repeat(${s.h},${cs}px)`;
   s.cells.forEach(([r,c])=>{ const b=document.createElement('i'); b.className='blk'; b.style.setProperty('--col',s.col); b.style.gridRow=r+1; b.style.gridColumn=c+1; dragEl.appendChild(b); });
@@ -746,15 +773,19 @@ function commit(i,r,c){
   const beforeStr = mode==='tutor' ? encodeBoard() : '';
   const res=placeO(before,s,r,c);
   for(const [a,b] of s.cells) board[(r+a)*N+c+b]=s.k;
+  const colorHits=monoLines();                     // líneas de un solo tono, antes de borrarlas
   const popped=res.cleared.map(k=>[k,SHAPES[board[k]].col]);
   res.cleared.forEach(k=>board[k]=null);          // se limpia al instante; la animación va aparte
   const wasSwapped=rescued.has(i);
   used[i]=true; rescued.delete(i);
+  const sc0=score;
   score+=s.cells.length;
+  const bonus=extraPoints(res, colorHits);         // racha y línea de color (suman solo en Eterno y Survival)
   if(res.n){
-    lines+=res.n; const pts=res.n*10*res.n; score+=pts;
-    const cb=$('#combo'); cb.textContent=res.n>1?`¡x${res.n}! +${pts}`:`+${pts}`; cb.classList.remove('show'); void cb.offsetWidth; cb.classList.add('show');
+    lines+=res.n; const pts=res.n*10*res.n+bonus.pts; score+=pts;
+    const cb=$('#combo'); cb.textContent=(res.n>1?`¡x${res.n}! `:'')+`+${pts}`+(bonus.label?` · ${bonus.label}`:''); cb.classList.remove('show'); void cb.offsetWidth; cb.classList.add('show');
   }
+  if(album && mode==='eterno') album.pts+=score-sc0;
   if(verdict) recordMove(verdict, s, i, r, c, before, res, beforeStr, wasSwapped, trayNow);
   after();
   popAnim(popped);
@@ -794,8 +825,10 @@ function popAnim(list){
   });
 }
 function after(){
-  if(score>best){ best=score; store.set(LS.best,best); }
-  if(used.every(Boolean)) newSet(); else checkRescue();
+  if(mode==='puzzle'){ puzzleAfter(); renderTray(); render(); saveState(); return; }
+  if(score>best){ best=score; store.set(bestKey(mode),best); }
+  if(used.every(Boolean)){ if(!(mode==='duelo' && X.setIdx>=X.N)) newSet(); } else checkRescue();
+  if(mode==='duelo') duelAfterMove();
   runAnalysis(); renderTray(); render(); saveState();
 }
 function newSet(){ tray=generateSet(); used=[false,false,false]; rescued=new Set(); sets++; checkRescue(); }
@@ -804,32 +837,41 @@ function decodeBoard(str){ return [...str].map(ch=>ch==='.'?null:ch.charCodeAt(0
 
 // ---------- Partida y persistencia ----------
 function freshGame(){ return {start:new Date().toISOString(), moves:[], worst:null, saves:0, lives:[], mark:0}; }
-function startGame(m){
+function startGame(m, seed){
   mode=m||mode;
-  board=new Array(64).fill(null); score=0; lines=0; sets=0; rescues=0; saves=0; game=freshGame(); flash=null;
-  newSet(); runAnalysis(); syncModeUI(); renderTray(); render(); saveState();
-  log(mode==='tutor'
-    ? 'Tutor: tandas reales como en el juego original. Cada jugada se evalúa contra la mejor posible con las piezas que tenías.'
-    : 'Arrastrá una pieza al tablero.');
+  board=new Array(64).fill(null); score=0; lines=0; sets=0; rescues=0; saves=0; game=freshGame(); flash=null; rescued=new Set();
+  best=+store.get(bestKey(mode))||0;
+  if(!modeStart(seed)) newSet();
+  runAnalysis(); syncModeUI(); renderTray(); render(); saveState();
+  log(modeLog());
 }
 function saveState(){
-  store.set(LS.state, JSON.stringify({v:2, mode, board:encodeBoard(), tray:tray.map(s=>s.id), used, score, lines, sets, rescues, saves, game}));
+  store.set(LS.state, JSON.stringify({v:2, mode, board:encodeBoard(), tray:tray.map(s=>s.id), used, score, lines, sets, rescues, saves, game, x:{streak,bestStreak,colorLines,lives,X}}));
 }
 function loadState(){
   try{
     const st=JSON.parse(store.get(LS.state)||'null');
     if(!st || st.v!==2) return false;
-    mode=st.mode==='tutor'?'tutor':'eterno';
+    mode=MODES[st.mode]?st.mode:'eterno';
     board=decodeBoard(st.board); tray=st.tray.map(id=>BY_ID[id]||DOT); used=st.used;
     ({score,lines,sets,rescues,saves,game}=st);
+    if(st.x){ ({streak,bestStreak,colorLines,lives}=st.x); X=st.x.X||{}; }
+    best=+store.get(bestKey(mode))||0;
+    if(mode==='duelo' && !X.eng) return false;
+    if(mode==='puzzle' && !X.p) return false;
     if(board.length!==64 || !game || !Array.isArray(game.moves)) return false;
     return true;
   }catch(e){ return false; }
 }
 function syncModeUI(){
-  $('#mTutor').setAttribute('aria-pressed', mode==='tutor'); $('#mEterno').setAttribute('aria-pressed', mode==='eterno');
+  document.querySelectorAll('[data-mode]').forEach(b=>b.setAttribute('aria-pressed', b.dataset.mode===mode));
   $('#rowTutor').hidden = mode!=='tutor'; $('#rowEterno').hidden = mode!=='eterno';
-  $('#sub').textContent = mode==='tutor' ? '8×8 · modo tutor' : '8×8 · nunca te quedás sin jugada';
+  $('#rowDuel').hidden = mode!=='duelo'; $('#rowPuzzle').hidden = mode!=='puzzle';
+  $('#sub').textContent = MODES[mode];
+  const lbl=document.querySelectorAll('.scores .score span');
+  lbl[0].textContent = mode==='puzzle' ? 'Nivel' : 'Puntos'; lbl[1].textContent = mode==='puzzle' ? 'Resueltos' : 'Récord';
+  $('#reset').textContent = {duelo:'Reiniciar duelo', puzzle:'Otro puzzle'}[mode] || 'Nueva partida';
+  renderDuel();
 }
 
 // ======================================================================
@@ -1105,8 +1147,7 @@ function switchMode(m){
   if(mode==='tutor' && game.moves.length>=MIN_MOVES){ const s=summarize(game,score,lines,sets); hist.push(s); saveHist(); log('Guardé la partida del tutor en el historial.'); }
   startGame(m);
 }
-$('#mEterno').addEventListener('click',()=>switchMode('eterno'));
-$('#mTutor').addEventListener('click',()=>switchMode('tutor'));
+document.querySelectorAll('[data-mode]').forEach(b=>b.addEventListener('click',()=>switchMode(b.dataset.mode)));
 $('#reset').addEventListener('click',()=>{
   if(mode==='tutor' && game.moves.length>=MIN_MOVES){ finishGame(); return; }   // no perdemos una partida medible
   startGame();
@@ -1633,6 +1674,283 @@ function patternsBlock(P){
   if(P.M.length<60) return `<div class="patterns"><h3>Por qué: tus patrones de decisión</h3><p class="empty">Con 60 jugadas medibles o más aparecen tus patrones: con qué tablero, con qué pieza y en qué momento de la tanda te equivocás (vas ${P.M.length}).</p></div>`;
   const items=P.out.slice(0,6).map(o=>`<li>${o.t}${o.n<30?' <span class="tag unk">indicio</span>':''}</li>`).join('') || '<li>Por ahora no aparece ningún patrón marcado: tus errores están repartidos parejo.</li>';
   return `<div class="patterns"><h3>Por qué: tus patrones de decisión</h3><ul>${items}</ul><p class="foot">Sobre ${P.M.length} jugadas medibles, error general ${P.all.err}%. “Indicio”: menos de 30 casos, tomalo con pinzas.</p></div>`;
+}
+
+// ======================================================================
+// Modos: racha y línea de color, Survival, Duelo (y desafío del día), Puzzles, sesión álbum
+// ======================================================================
+const MODES={eterno:'8×8 · nunca te quedás sin jugada', tutor:'8×8 · modo tutor', duelo:'Duelo · las mismas piezas que el motor',
+  survival:'Survival · 3 vidas', puzzle:'Puzzles · dejá el tablero limpio'};
+const bestKey=m=> m==='eterno' ? LS.best : 'be-best-'+m;
+const BONUS_MODES=['eterno','survival'];          // racha y color suman puntos solo acá (en Duelo y Tutor el puntaje es el clásico)
+const PZ_COLOR=BY_ID['T'].k;                       // color de los bloques de arranque en los puzzles
+
+function showSheet(html, onReady){
+  $('#sheet').innerHTML=html; $('#sheetWrap').hidden=false;
+  const c=$('#closeBal'); if(c){ c.focus(); c.addEventListener('click',closeBalance); }
+  if(onReady) onReady();
+}
+
+// ---------- Línea de color: fila o columna completa de un solo tono ----------
+const HUE=SHAPES.map(s=>{
+  const n=parseInt(s.col.slice(1),16), r=(n>>16&255)/255, g=(n>>8&255)/255, b=(n&255)/255;
+  const mx=Math.max(r,g,b), mn=Math.min(r,g,b), d=mx-mn; let h=0;
+  if(d){ h = mx===r ? ((g-b)/d)%6 : mx===g ? (b-r)/d+2 : (r-g)/d+4; h*=60; if(h<0) h+=360; }
+  return h<20||h>=330 ? 0 : h<60 ? 1 : h<160 ? 2 : h<200 ? 3 : h<250 ? 4 : 5;   // rojo, naranja, verde, celeste, azul, violeta
+});
+function monoLines(){
+  let n=0;
+  const same=idx=> idx.every(i=>board[i]!=null) && idx.every(i=>HUE[board[i]]===HUE[board[idx[0]]]);
+  for(let i=0;i<N;i++){ const row=[], col=[]; for(let j=0;j<N;j++){ row.push(i*N+j); col.push(j*N+i); }
+    if(same(row)) n++; if(same(col)) n++; }
+  return n;
+}
+// Racha: jugadas seguidas rompiendo al menos una línea
+function extraPoints(res, hits){
+  if(res.n){ streak++; bestStreak=Math.max(bestStreak,streak); } else streak=0;
+  colorLines+=hits;
+  if(album && mode==='eterno'){ album.lines+=res.n; album.color+=hits; album.placed++; album.best=Math.max(album.best,streak); }
+  if(!BONUS_MODES.includes(mode) || !res.n) return {pts:0, label:''};
+  const pr = streak>=2 ? 10*(streak-1) : 0, pc = 40*hits;
+  return {pts:pr+pc, label:[streak>=2?`racha x${streak}`:'', hits?'¡color!':''].filter(Boolean).join(' · ')};
+}
+function modeStats(){
+  const st=[];
+  if(mode==='eterno') st.push(`<span>Tandas <b>${sets}</b></span>`,`<span>Líneas <b>${lines}</b></span>`,`<span>Rescates <b>${rescues}</b></span>`);
+  if(mode==='survival') st.push(`<span>Vidas <b class="lives">${'♥'.repeat(Math.max(0,lives))}${'♡'.repeat(Math.max(0,3-lives))}</b></span>`,`<span>Líneas <b>${lines}</b></span>`);
+  if(mode==='duelo') st.push(`<span>Tanda <b>${Math.min(X.setIdx,X.N)} de ${X.N}</b></span>`,`<span>Tus vidas perdidas <b>${X.lost}</b></span>`);
+  if(mode==='puzzle') st.push(`<span>Intentos <b>${X.tries}</b></span>`,`<span>Pistas <b>${X.hints}</b></span>`);
+  if(BONUS_MODES.includes(mode)) st.push(`<span>Racha <b>${streak}</b></span>`,`<span>Mejor racha <b>${bestStreak}</b></span>`,`<span>Líneas de color <b>${colorLines}</b></span>`);
+  return st.join('');
+}
+// Arranque de cada modo. Devuelve true si el modo ya armó tablero y bandeja.
+function modeStart(seed){
+  streak=0; bestStreak=0; colorLines=0; X={};
+  if(mode==='survival'){ lives=3; X.lifePts=[]; X.mark=0; }
+  if(mode==='duelo') duelInit(seed);
+  if(mode==='puzzle'){ puzzleLoad(); return true; }
+  return false;
+}
+function modeLog(){
+  return {eterno:'Arrastrá una pieza al tablero.',
+    tutor:'Tutor: tandas reales como en el juego original. Cada jugada se evalúa contra la mejor posible con las piezas que tenías.',
+    survival:'Survival: tandas reales y 3 vidas. Cada vez que te trabás perdés una; sin vidas, se termina.',
+    duelo: X.kind==='daily' ? 'Desafío del día: las mismas 20 tandas para vos y para el motor. Las de hoy no cambian hasta mañana.' : 'Duelo libre: 20 tandas al azar, iguales para vos y para el motor.',
+    puzzle:`Puzzle nivel ${X.level}: colocá las 3 piezas y dejá el tablero vacío.`}[mode];
+}
+// Te trabaste (Survival y Duelo)
+function modeStuck(idx){
+  if(mode==='survival'){
+    lives--; X.lifePts.push(score-X.mark); X.mark=score;
+    if(lives<=0){ survivalOver(); return; }
+    const ch=swapForExit(idx); rescued=new Set(ch);
+    log(`Perdiste una vida: te ${lives===1?'queda 1':'quedan '+lives}. Te cambié piezas para que sigas.`);
+  } else {
+    // Duelo: la misma regla que se le aplica al motor, para que sea parejo
+    X.lost++; idx.forEach(i=>tray[i]=DOT); rescued=new Set(idx);
+    log('Te trabaste: perdés una vida y esas piezas pasan a ser Puntos. Al motor le aplica la misma regla.');
+  }
+}
+
+// ---------- Survival ----------
+function survivalOver(){
+  X.over=true; X.lifePts.push(0);
+  const rec=score>=(+store.get(bestKey('survival'))||0) && score>0;
+  if(score>best){ best=score; store.set(bestKey('survival'),best); }
+  const H=readJSON('be-surv-hist',[]); H.push({date:new Date().toISOString(), pts:score, lines, bestStreak, color:colorLines, lives:X.lifePts.slice(0,3)});
+  store.set('be-surv-hist', JSON.stringify(H.slice(-30)));
+  const last=H.slice(-6,-1).map(h=>h.pts);
+  showSheet(`<div class="bal-top"><div><h2 id="balTitle">Fin del Survival</h2><div class="bal-date">${dateTxt(new Date().toISOString())}</div></div><button type="button" id="closeBal" class="ghost">Cerrar</button></div>
+    <div class="global"><div><div class="big">${score}</div><div class="lbl">Puntos</div></div>
+      <div class="side"><b>${rec?'¡Nuevo récord!':'Récord: '+best}</b>${last.length?`<span class="lbl">Tus anteriores: ${last.join(' · ')}</span>`:''}</div></div>
+    <div class="kpis">
+      <div class="kpi wide"><b>${X.lifePts.slice(0,3).join(' · ')}</b><span>Puntos de cada vida</span></div>
+      <div class="kpi"><b>${lines}</b><span>Líneas</span></div>
+      <div class="kpi"><b>${bestStreak}</b><span>Mejor racha</span></div>
+      <div class="kpi"><b>${colorLines}</b><span>Líneas de color</span></div>
+      <div class="kpi"><b>${sets}</b><span>Tandas</span></div>
+    </div>
+    <div class="tools"><button type="button" id="again" class="primary">Jugar de nuevo</button></div>`,
+    ()=>$('#again').addEventListener('click',()=>{ closeBalance(); startGame('survival'); }));
+  log('Sin vidas: se terminó. Tocá “Jugar de nuevo” o elegí otro modo.');
+}
+
+// ---------- Duelo contra el motor ----------
+function seedRng(seed){ let a=seed>>>0; return ()=>{ a=a+0x6D2B79F5|0; let t=Math.imul(a^a>>>15,1|a); t=t+Math.imul(t^t>>>7,61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }; }
+function pickWith(R){ const tot=ACTIVE.reduce((a,s)=>a+wOf(s),0); let x=R()*tot; for(const s of ACTIVE){ x-=wOf(s); if(x<=0) return s; } return ACTIVE[0]; }
+const DUEL_N=20;
+const todayKey=()=>{ const d=new Date(); return d.getFullYear()*10000+(d.getMonth()+1)*100+d.getDate(); };
+let duelKind=store.get('be-duelkind')==='free' ? 'free' : 'daily';
+const dailyAll=()=>readJSON('be-daily',{});
+function dailyRec(){ return dailyAll()[todayKey()] || {tries:0, best:null, engine:null}; }
+function saveDaily(r){ const all=dailyAll(); all[todayKey()]=r; store.set('be-daily', JSON.stringify(all)); }
+function duelInit(seed){
+  const sd = seed ?? (duelKind==='daily' ? todayKey() : (Math.random()*2**31)|0);
+  const R=seedRng(sd);
+  X.kind=duelKind; X.seed=sd; X.N=DUEL_N; X.setIdx=0; X.lost=0; X.pm=0; X.done=false;
+  X.seq=[...Array(DUEL_N)].map(()=>[pickWith(R),pickWith(R),pickWith(R)].map(s=>s.id));
+  X.eng={b:Array(64).fill(null), set:0, rest:[], score:0, lost:0, moves:0};
+  if(duelKind==='daily'){ const d=dailyRec(); d.tries++; saveDaily(d); }
+}
+function duelNextSet(){ return X.seq[X.setIdx++].map(id=>BY_ID[id]); }
+function engineStep(){
+  const e=X.eng; if(e.moves>=X.N*3) return;
+  if(!e.rest.length) e.rest=X.seq[e.set++].slice();
+  const o=new Uint8Array(64); e.b.forEach((v,i)=>o[i]=v==null?0:1);
+  let P=e.rest.map(id=>BY_ID[id]);
+  if(!P.some(s=>anyFit(o,s))){ e.lost++; e.rest=e.rest.map(()=>'dot'); P=e.rest.map(id=>BY_ID[id]); }
+  const A=analyze(o, P.map((s,i)=>({i,s}))), s=P[A.best.slot], [r,c]=A.best.pos, res=placeO(o,s,r,c);
+  s.cells.forEach(([a,b])=>e.b[(r+a)*N+c+b]=s.k); res.cleared.forEach(k=>e.b[k]=null);
+  e.score+=s.cells.length+res.n*10*res.n; e.moves++; e.rest.splice(A.best.slot,1);
+}
+// El motor juega una jugada por cada jugada tuya, un instante después (así lo ves avanzar)
+let engTimer=0;
+function duelAfterMove(){
+  X.pm++;
+  clearTimeout(engTimer);
+  engTimer=setTimeout(()=>{
+    if(mode!=='duelo' || !X.eng) return;
+    while(X.eng.moves<X.pm) engineStep();
+    renderDuel(); duelCheckEnd(); saveState();
+  },160);
+}
+function renderDuel(){
+  const box=$('#duelBox'); box.hidden = mode!=='duelo' || !X.eng;
+  if(box.hidden) return;
+  const e=X.eng, diff=score-e.score;
+  $('#engScore').textContent=e.score;
+  $('#engInfo').textContent=`${e.moves} de ${X.N*3} jugadas · vidas perdidas ${e.lost}`;
+  $('#duelDiff').textContent = X.pm ? (diff>0?`Vas ganando por ${diff}`:diff<0?`Vas perdiendo por ${-diff}`:'Van empatados') : 'Tu turno';
+  $('#duelDiff').style.color = diff>0?'var(--c-opt)':diff<0?'var(--c-err)':'var(--muted)';
+  $('#engBoard').innerHTML=e.b.map(v=>v==null?'<i></i>':`<i class="on" style="--col:${SHAPES[v].col}"></i>`).join('');
+  const d=dailyRec();
+  $('#duelInfo').textContent = X.kind==='daily' ? `Hoy: intento ${d.tries} · tu mejor ${d.best??'–'}${d.engine!=null?` · motor ${d.engine}`:''}` : 'Piezas al azar, iguales para los dos.';
+  $('#dDaily').setAttribute('aria-pressed', X.kind==='daily'); $('#dFree').setAttribute('aria-pressed', X.kind==='free');
+}
+function duelCheckEnd(){
+  if(X.done || X.pm<X.N*3 || X.eng.moves<X.N*3) return;
+  X.done=true; X.over=true;
+  const e=X.eng, diff=score-e.score;
+  let rec='';
+  if(X.kind==='daily'){ const d=dailyRec(); const prev=d.best; d.best=Math.max(d.best??0,score); d.engine=e.score; saveDaily(d);
+    rec = prev==null ? '' : score>prev ? `Mejoraste tu marca de hoy (${prev}).` : `Tu mejor de hoy sigue siendo ${prev}.`; }
+  if(score>best){ best=score; store.set(bestKey('duelo'),best); }
+  renderDuel();
+  const title = diff>0 ? '¡Le ganaste al motor!' : diff<0 ? 'Ganó el motor' : 'Empate';
+  showSheet(`<div class="bal-top"><div><h2 id="balTitle">${title}</h2><div class="bal-date">${X.kind==='daily'?'Desafío del día':'Duelo libre'} · ${X.N} tandas</div></div><button type="button" id="closeBal" class="ghost">Cerrar</button></div>
+    <div class="kpis">
+      <div class="kpi"><b>${score}</b><span>Tus puntos</span></div>
+      <div class="kpi"><b>${e.score}</b><span>Puntos del motor</span></div>
+      <div class="kpi"><b>${X.lost}</b><span>Tus vidas perdidas</span></div>
+      <div class="kpi"><b>${e.lost}</b><span>Vidas perdidas del motor</span></div>
+      <div class="kpi wide"><b>${diff>0?'+':''}${diff}</b><span>Diferencia${rec?' · '+rec:''}</span></div>
+    </div>
+    <p class="foot">Las mismas tandas para los dos y la misma regla al trabarse (perdés una vida y esas piezas pasan a ser Puntos). Gana el que suma más puntos.</p>
+    <div class="tools"><button type="button" id="again" class="primary">Revancha con las mismas piezas</button>${X.kind==='free'?'<button type="button" id="newDuel">Duelo nuevo</button>':''}</div>`,
+    ()=>{ const seed=X.seed;
+      $('#again').addEventListener('click',()=>{ closeBalance(); startGame('duelo', seed); });
+      const nd=$('#newDuel'); if(nd) nd.addEventListener('click',()=>{ closeBalance(); startGame('duelo'); }); });
+}
+$('#dDaily').addEventListener('click',()=>{ if(duelKind==='daily' && mode==='duelo') return; duelKind='daily'; store.set('be-duelkind','daily'); startGame('duelo'); });
+$('#dFree').addEventListener('click',()=>{ if(duelKind==='free' && mode==='duelo') return; duelKind='free'; store.set('be-duelkind','free'); startGame('duelo'); });
+
+// ---------- Puzzles: dejá el tablero limpio ----------
+let pz=readJSON('be-puzzle',{level:1, solved:0});
+const PERMS=[[0,1,2],[0,2,1],[1,0,2],[1,2,0],[2,0,1],[2,1,0]];
+// Se arma al revés: se eligen las líneas a limpiar y 3 piezas que caen dentro de ellas; el tablero es
+// el resto de esas líneas. Después se verifica que exista un orden que deje el tablero vacío.
+function genPuzzle(level){
+  const nl=Math.min(5, 2+Math.floor((level-1)/3));          // de 2 líneas a 5 según el nivel
+  for(let t=0;t<600;t++){
+    const L=new Set(); while(L.size<nl){ L.add((Math.random()<.5?'r':'c')+Math.floor(Math.random()*8)); }
+    const inL=new Uint8Array(64), lineCells=[];
+    for(const l of L){ const k=+l.slice(1), cells=[]; for(let j=0;j<8;j++){ const i=l[0]==='r'?k*8+j:j*8+k; inL[i]=1; cells.push(i); } lineCells.push(cells); }
+    const usedC=new Uint8Array(64), sol=[]; let ok=true;
+    for(let p=0;p<3 && ok;p++){
+      let placed=false;
+      for(let a=0;a<40 && !placed;a++){
+        const s=pickWeighted(); if(s.id==='dot') continue;
+        const opts=[];
+        for(let r=0;r<=8-s.h;r++) for(let c=0;c<=8-s.w;c++) if(s.cells.every(([y,x])=>{ const i=(r+y)*8+c+x; return inL[i]&&!usedC[i]; })) opts.push([r,c]);
+        if(opts.length){ const [r,c]=opts[Math.floor(Math.random()*opts.length)]; s.cells.forEach(([y,x])=>usedC[(r+y)*8+c+x]=1); sol.push([s.id,r,c]); placed=true; }
+      }
+      if(!placed) ok=false;
+    }
+    if(!ok) continue;
+    if(!lineCells.every(cells=>cells.some(i=>usedC[i]))) continue;     // ninguna línea puede arrancar completa
+    const start=new Uint8Array(64); for(let i=0;i<64;i++) start[i]=inL[i]&&!usedC[i]?1:0;
+    let full=false; for(let i=0;i<8&&!full;i++){ let rf=1,cf=1; for(let j=0;j<8;j++){ if(!start[i*8+j]) rf=0; if(!start[j*8+i]) cf=0; } full=!!(rf||cf); }
+    if(full) continue;                                                    // ninguna línea completa al arrancar
+    let good=null;
+    for(const pm of PERMS){ let o=start.slice(), okp=true;
+      for(const k of pm){ const [id,r,c]=sol[k], s=BY_ID[id]; if(!fits(o,s,r,c)){ okp=false; break; } o=placeO(o,s,r,c).o; }
+      if(okp && o.every(v=>!v)){ good=pm.map(k=>sol[k]); break; } }
+    if(!good) continue;
+    const tr=sol.map(x=>x[0]).sort(()=>Math.random()-.5);              // la bandeja no delata el orden
+    return {start:[...start], tray:tr, sol:good};
+  }
+  return null;
+}
+function puzzleLoad(){
+  const p=genPuzzle(pz.level) || genPuzzle(1);
+  X.level=pz.level; X.tries=1; X.hints=0; X.p=p;
+  board=p.start.map(v=>v?PZ_COLOR:null); tray=p.tray.map(id=>BY_ID[id]); used=[false,false,false];
+}
+function puzzleReset(){
+  board=X.p.start.map(v=>v?PZ_COLOR:null); tray=X.p.tray.map(id=>BY_ID[id]); used=[false,false,false]; X.tries++; X.over=false; flash=null;
+  renderTray(); render(); saveState(); log('De nuevo desde el principio.');
+}
+function puzzleAfter(){
+  const empty=board.every(v=>v==null), left=[0,1,2].filter(i=>!used[i]);
+  if(!left.length && empty){
+    X.over=true; pz.level++; pz.solved++; store.set('be-puzzle', JSON.stringify(pz));
+    const cb=$('#combo'); cb.textContent='¡Limpio!'; cb.classList.remove('show'); void cb.offsetWidth; cb.classList.add('show');
+    log(`¡Resuelto${X.tries===1?' al primer intento':` en ${X.tries} intentos`}! Va el nivel ${pz.level}.`);
+    setTimeout(()=>{ if(mode==='puzzle') startGame('puzzle'); },1100);
+    return;
+  }
+  const o=occ(board);
+  if(!left.length || !left.some(i=>anyFit(o,tray[i]))){
+    X.over=true; log(left.length ? 'No entra la pieza que queda: así no se limpia. Tocá “Reintentar”.' : 'No quedó limpio. Probá otro orden o lugar: tocá “Reintentar”.');
+  }
+}
+$('#pzRetry').addEventListener('click',()=>{ if(mode==='puzzle') puzzleReset(); });
+$('#pzSkip').addEventListener('click',()=>{ if(mode==='puzzle'){ startGame('puzzle'); log(`Otro puzzle del nivel ${pz.level}.`); } });
+$('#pzHint').addEventListener('click',()=>{
+  if(mode!=='puzzle') return;
+  if(used.some(Boolean)) puzzleReset();
+  const [id,r,c]=X.p.sol[0]; X.hints++;
+  flash=cellsOf(BY_ID[id],r,c); render();
+  log(`Pista: arrancá con la pieza ${nameOf(id)} en el lugar marcado.`);
+  clearTimeout(flashTimer); flashTimer=setTimeout(()=>{ flash=null; render(); },2200);
+});
+
+// ---------- Sesión álbum (en Eterno): ponés una duración y al final te da el resumen ----------
+let album=null, albumTimer=0;
+$('#album').addEventListener('change',()=>{
+  const m=+$('#album').value; clearInterval(albumTimer);
+  if(!m){ album=null; $('#albumLeft').textContent=''; return; }
+  album={min:m, start:Date.now(), end:Date.now()+m*60e3, lines:0, color:0, placed:0, best:0, pts:0};
+  tickAlbum(); albumTimer=setInterval(tickAlbum,1000);
+  log(`Sesión de ${m} minutos: seguí jugando tranquilo, al final te muestro el resumen.`);
+});
+function tickAlbum(){
+  if(!album) return;
+  const left=album.end-Date.now();
+  if(left<=0){ endAlbum(); return; }
+  $('#albumLeft').textContent=`Quedan ${Math.floor(left/60e3)}:${String(Math.floor(left%60e3/1000)).padStart(2,'0')}`;
+}
+function endAlbum(){
+  clearInterval(albumTimer); const a=album; album=null; $('#album').value='0'; $('#albumLeft').textContent='';
+  if(!a) return;
+  showSheet(`<div class="bal-top"><div><h2 id="balTitle">Fin de la sesión</h2><div class="bal-date">${a.min} minutos</div></div><button type="button" id="closeBal" class="ghost">Cerrar</button></div>
+    <div class="global"><div><div class="big">${a.lines}</div><div class="lbl">Líneas rotas</div></div><div class="side"><b>${a.pts} pts</b><span class="lbl">Puntos en la sesión</span></div></div>
+    <div class="kpis">
+      <div class="kpi"><b>${a.placed}</b><span>Piezas colocadas</span></div>
+      <div class="kpi"><b>${a.best}</b><span>Mejor racha</span></div>
+      <div class="kpi"><b>${a.color}</b><span>Líneas de color</span></div>
+      <div class="kpi"><b>${a.placed?(a.lines/a.placed*10).toFixed(1):'0'}</b><span>Líneas cada 10 piezas</span></div>
+    </div>`);
 }
 
 buildBoard();

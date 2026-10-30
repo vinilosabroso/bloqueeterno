@@ -28,3 +28,10 @@ Lee el historial a medida que guardás partidas del Tutor y entrena tus falencia
 - **Puntos por vida**: puntos sumados entre rescates en cada partida del Tutor (la última vida termina cuando cerrás la partida, no por perder).
 - **Errores sin causa clara**: registro persistente (no se borra con el historial, hasta 400 casos) con tablero, bandeja, tu jugada, la sugerida, el mejor final de la bandeja en cada caso, métricas comparadas y qué pasó en las jugadas siguientes. Se exporta con su propio prompt para que Claude proponga reglas nuevas o detecte errores del motor.
 - **Patrones de decisión (el porqué)**: cruza tus errores con el contexto de cada jugada: qué tan lleno y ordenado estaba el tablero, qué pieza de la tanda jugabas, el arranque de la partida, con qué pieza arrancás cada tanda (la de más o menos lugares, la más grande) comparado con el motor, en qué situación se te traba la bandeja, líneas que había para romper, piezas y zona del tablero. Solo afirma con 15 casos o más por grupo y marca como "indicio" lo que tiene menos de 30. Validado con jugadores simulados con sesgos conocidos.
+
+## Más modos
+- **Duelo**: 20 tandas con semilla; el motor juega exactamente las mismas en un tablero chico al lado, una jugada por cada jugada tuya. Misma regla para los dos al trabarse (se pierde una vida y esas piezas pasan a ser Puntos). Gana el que suma más. **Desafío del día**: la misma secuencia todo el día, con intentos y mejor marca; **Duelo libre**: piezas nuevas; revancha con las mismas piezas.
+- **Survival**: tandas reales y 3 vidas; cada vez que te trabás perdés una. Resumen con puntos de cada vida y récord.
+- **Puzzles**: un tablero y 3 piezas para dejarlo vacío. Se generan al revés (líneas a limpiar + piezas que caen en ellas) y se verifica que tengan solución. De 2 a 5 líneas según el nivel; reintentar, pista y otro puzzle.
+- **Racha y línea de color** (Eterno y Survival): bonus por romper líneas en jugadas seguidas y por romper una línea de un solo tono.
+- **Sesión álbum** (Eterno): elegís 30, 45 o 60 minutos y al final te muestra el resumen de la sesión.
